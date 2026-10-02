@@ -1,0 +1,13 @@
+[
+ ["diagnostics", {"action":"get_device_ip","deviceName":"PLC_1"}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"PLC_1"}],
+ ["download_upload", {"action":"download_check","deviceName":"PLC_1"}],
+ ["diagnostics", {"action":"configure_connection","deviceName":"PLC_1", "_expectError":true}],
+ ["diagnostics", {"action":"configure_connection","deviceName":"PLC_1","confirm":"yes", "_expectError":true}],
+ ["diagnostics", {"action":"configure_connection","deviceName":"PLC_1","confirm":"yes","pcInterfaceName":"PLCSIM"}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"PLC_1"}],
+ ["download_upload", {"action":"download_check","deviceName":"PLC_1"}],
+ ["download_upload", {"action":"download_to_device","deviceName":"PLC_1","pcInterfaceName":"PLCSIM", "_expectError":true}],
+ ["download_upload", {"action":"upload_check"}],
+ ["diagnostics", {"action":"scan_devices","deviceName":"PLC_1"}]
+]

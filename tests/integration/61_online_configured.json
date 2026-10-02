@@ -1,0 +1,7 @@
+[
+ ["diagnostics", {"action":"configure_connection","deviceName":"PLC_1","confirm":"yes","pcInterfaceName":"PLCSIM"}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"PLC_1"}],
+ ["download_upload", {"action":"download_check","deviceName":"PLC_1"}],
+ ["diagnostics", {"action":"go_online","deviceName":"PLC_1", "_expectError":true}],
+ ["diagnostics", {"action":"go_offline","deviceName":"PLC_1"}]
+]

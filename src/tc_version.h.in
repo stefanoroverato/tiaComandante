@@ -1,0 +1,7 @@
+#ifndef TC_VERSION_H
+#define TC_VERSION_H
+
+#define TC_VERSION "@PROJECT_VERSION@"
+#define TC_NAME "tiacomandante"
+
+#endif

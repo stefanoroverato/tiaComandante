@@ -1,0 +1,4 @@
+claude mcp add tiacomandante -- C:\TiaComandante\tiacomandante.exe
+
+# read-only variant
+claude mcp add tiacomandante-ro -- C:\TiaComandante\tiacomandante.exe --read-only

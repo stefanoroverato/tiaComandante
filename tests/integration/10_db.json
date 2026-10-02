@@ -1,0 +1,23 @@
+[
+ ["db", {"action":"create","deviceName":"PLC_1","dbName":"DB_Test","members":[
+    {"name":"speed","dataType":"Real","startValue":"1.5","comment":"motor speed"},
+    {"name":"cfg","dataType":"Struct"},
+    {"name":"cfg.enabled","dataType":"Bool","startValue":"TRUE"},
+    {"name":"arr","dataType":"Array[0..3] of Int"}]}],
+ ["db", {"action":"create","deviceName":"PLC_1","dbName":"DB_Test", "_expectError":true}],
+ ["db", {"action":"create","deviceName":"PLC_1","dbName":"DB_InFolder","targetFolder":"Area/Sub", "_expectError":true}],
+ ["db", {"action":"create","deviceName":"PLC_1","dbName":"DB_InFolder","targetFolder":"Area/Sub","createParents":true,"dbNumber":42}],
+ ["db", {"action":"list","deviceName":"PLC_1"}],
+ ["db", {"action":"add_member","deviceName":"PLC_1","dbName":"DB_Test","memberName":"count","dataType":"DInt","initialValue":"7","comment":"counter"}],
+ ["db", {"action":"add_member","deviceName":"PLC_1","dbName":"DB_Test","memberName":"cfg.limit","dataType":"Int","initialValue":"100"}],
+ ["db", {"action":"add_member","deviceName":"PLC_1","dbName":"DB_Test","memberName":"count","dataType":"Int", "_expectError":true}],
+ ["db", {"action":"update_member","deviceName":"PLC_1","dbName":"DB_Test","memberName":"speed","newDataType":"LReal","newStartValue":"2.5"}],
+ ["db", {"action":"update_member_comment","deviceName":"PLC_1","dbName":"DB_Test","memberName":"count","newComment":"pieces counted"}],
+ ["db", {"action":"set_start_value","deviceName":"PLC_1","dbName":"DB_Test","values":{"cfg.limit":"250","arr[2]":"9"}}],
+ ["db", {"action":"get_structure","deviceName":"PLC_1","dbName":"DB_Test"}],
+ ["db", {"action":"get_member","deviceName":"PLC_1","dbName":"DB_Test","path":"arr[2]"}],
+ ["db", {"action":"delete_member","deviceName":"PLC_1","dbName":"DB_Test","memberName":"count"}],
+ ["db", {"action":"get_member","deviceName":"PLC_1","dbName":"DB_Test","path":"cfg"}],
+ ["db", {"action":"delete","deviceName":"PLC_1","dbName":"Area/Sub/DB_InFolder"}],
+ ["blocks_read", {"action":"compile_all","deviceName":"PLC_1"}]
+]

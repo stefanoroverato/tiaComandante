@@ -1,0 +1,20 @@
+[
+ ["udt", {"action":"create","deviceName":"PLC_1","udtName":"typeMotor","members":[
+    {"name":"speed","dataType":"Real","comment":"rpm"},
+    {"name":"running","dataType":"Bool"}]}],
+ ["udt", {"action":"create","deviceName":"PLC_1","udtName":"typeEmpty"}],
+ ["udt", {"action":"add_member","deviceName":"PLC_1","udtName":"typeEmpty","members":[{"name":"a","dataType":"Int"},{"name":"m","dataType":"typeMotor"}]}],
+ ["udt", {"action":"delete_member","deviceName":"PLC_1","udtName":"typeEmpty","memberName":"_placeholder"}],
+ ["udt", {"action":"update_member","deviceName":"PLC_1","udtName":"typeMotor","memberName":"speed","newDataType":"LReal","newInitialValue":"10.0"}],
+ ["udt", {"action":"update_member_comment","deviceName":"PLC_1","udtName":"typeMotor","memberName":"running","newComment":"motor is running"}],
+ ["udt", {"action":"get_structure","deviceName":"PLC_1","udtName":"typeEmpty"}],
+ ["udt", {"action":"get_structure","deviceName":"PLC_1","udtName":"typeMotor"}],
+ ["db", {"action":"create","deviceName":"PLC_1","dbName":"DB_Motors","members":[{"name":"m1","dataType":"typeMotor"}]}],
+ ["udt", {"action":"delete","deviceName":"PLC_1","udtName":"typeMotor", "_expectError":true}],
+ ["udt", {"action":"move","deviceName":"PLC_1","udtName":"typeEmpty","targetFolder":"Types/Basic","createParents":true}],
+ ["udt", {"action":"list","deviceName":"PLC_1"}],
+ ["udt", {"action":"export_xml","deviceName":"PLC_1","udtName":"Types/Basic/typeEmpty","outputPath":"${TEMP}/tiaComandante/out/"}],
+ ["udt", {"action":"import_xml","deviceName":"PLC_1","filePath":"${TEMP}/tiaComandante/out/typeEmpty.xml", "_expectError":true}],
+ ["udt", {"action":"import_xml","deviceName":"PLC_1","filePath":"${TEMP}/tiaComandante/out/typeEmpty.xml","overwrite":true,"targetFolder":"Types/Basic"}],
+ ["blocks_read", {"action":"compile_all","deviceName":"PLC_1"}]
+]

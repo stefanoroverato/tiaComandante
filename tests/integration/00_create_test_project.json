@@ -1,0 +1,5 @@
+[
+ ["session", {"action":"create","name":"tcTest_${TS}","parentDirectory":"${TEMP}/tiaComandante/projects","withUI":false}],
+ ["dev", {"action":"add_device","orderNumber":"6ES7 511-1AL03-0AB0/V4.1","name":"PLC_1","deviceName":"S71500_test"}],
+ ["session", {"action":"list_devices"}]
+]
