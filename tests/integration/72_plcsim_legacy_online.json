@@ -1,0 +1,9 @@
+[
+ ["session", {"action":"create","name":"tcLegacy_${TS}","parentDirectory":"${TEMP}/tiaComandante/projects","withUI":false}],
+ ["download_upload", {"action":"upload_station","modeName":"PN/IE","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","legacyCommunication":true,"confirm":"I understand this will add a device to the project"}],
+ ["session", {"action":"list_devices"}],
+ ["diagnostics", {"action":"go_online","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","legacyCommunication":true}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"${PLC_DEVICE}"}],
+ ["diagnostics", {"action":"go_offline","deviceName":"${PLC_DEVICE}"}],
+ ["diagnostics", {"action":"compare_online_offline","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","legacyCommunication":true}]
+]

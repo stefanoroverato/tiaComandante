@@ -42,7 +42,7 @@ static void run_gates(tool_ctx *c, nav_plc *plc, gates *g, int compile)
     td_clear_err();
     if (compile && !g->online) {
         th comp = td_service(plc->software, "Siemens.Engineering.Compiler.ICompilable");
-        th res = comp ? td_call_h(comp, "Compile", NULL) : 0;
+        th res = comp ? session_compile(comp) : 0;
         if (res) {
             long long errs = 0;
             td_get_i(res, "ErrorCount", &errs);
@@ -92,6 +92,7 @@ typedef struct dl_policy {
     int unhandled;
     SRWLOCK lock;
     strbuf log;
+    on_secret secret;
 } dl_policy;
 
 static void policy_log(dl_policy *p, const char *phase, const char *type, const char *choice, const char *msg)
@@ -156,9 +157,12 @@ static int on_download_config(void *ctx, const cJSON *args, cJSON **result, cons
             choice = "Checked";
         td_clear_err();
     }
+    const char *pw_note = NULL;
+    if (!choice && on_answer_password(&p->secret, cfg, &pw_note) == 0)
+        choice = pw_note;
     if (!choice) {
         InterlockedIncrement((volatile LONG *)&p->unhandled);
-        policy_log(p, phase, type, "NOT HANDLED - the download is cancelled by TIA Portal", msg);
+        policy_log(p, phase, type, pw_note ? pw_note : "NOT HANDLED - the download is cancelled by TIA Portal", msg);
     } else {
         policy_log(p, phase, type, choice, msg);
     }
@@ -237,6 +241,8 @@ static int a_download_to_device(tool_ctx *c)
         return fail(c, "DESTRUCTIVE: this downloads to the real PLC %s. Repeat with confirm='%s'.", plc.device_name,
                     CONFIRM_DOWNLOAD);
     int hardware = 0;
+    if (arg_s(c, "readPassword") || arg_s(c, "writePassword"))
+        return fail(c, "%s", PLC_PASSWORD_ARGS);
     const char *options = download_options(arg_s(c, "mode"), &hardware);
     if (!options)
         return fail(c, "mode must be software_changes, software, hardware_software or hardware");
@@ -251,6 +257,8 @@ static int a_download_to_device(tool_ctx *c)
     th cfg = dp ? td_get_h(dp, "Configuration") : 0;
     if (!cfg)
         return fail_td(c, "no download provider for this device");
+    if (on_apply_legacy(c, cfg, "the download") != 0)
+        return -1;
     const char *pc = arg_s(c, "pcInterfaceName");
     th pc_h = 0;
     th target = on_find_target(c, cfg, arg_s(c, "connectionMode"), pc, arg_s(c, "targetInterface"), &pc_h);
@@ -273,6 +281,7 @@ static int a_download_to_device(tool_ctx *c)
     const char *ip = arg_s(c, "targetIp");
     if (!ip || !*ip)
         ip = g.ip;
+    on_secret_init(&p->secret, ip);
     th addr = 0;
     if (ip && *ip) {
         th addrs = td_get_h(target, "Addresses");
@@ -294,6 +303,8 @@ static int a_download_to_device(tool_ctx *c)
     int rc = 0;
     if (!res) {
         rc = fail_td(c, "download failed");
+        if (strstr(td_err(), "connection"))
+            on_legacy_hint(c);
     } else {
         th result = tdv_h(res);
         cJSON *a = td_attrs(result, "State,ErrorCount,WarningCount");
@@ -312,6 +323,7 @@ static int a_download_to_device(tool_ctx *c)
         out(c, "%ld confirmation(s) had no safe automatic answer: complete the download in TIA Portal or adjust the options.\n",
             (long)p->unhandled);
     sb_free(&p->log);
+    on_secret_free(&p->secret);
     free(p);
     return rc ? rc : (c->is_error ? -1 : 0);
 }
@@ -330,14 +342,23 @@ static int a_upload_check(tool_ctx *c)
     return 0;
 }
 
+typedef struct up_ctx {
+    strbuf log;
+    on_secret secret;
+} up_ctx;
+
 static int on_upload_config(void *ctx, const cJSON *args, cJSON **result)
 {
     (void)result;
-    strbuf *log = ctx;
+    up_ctx *u = ctx;
     th cfg = tdv_h(cJSON_GetArrayItem(args, 0));
     char *full = cfg ? td_typename(cfg) : NULL;
     char *msg = cfg ? td_get_s(cfg, "Message") : NULL;
-    sb_printf(log, "  %s%s%s\n", full ? full : "?", msg ? ": " : "", msg ? msg : "");
+    td_clear_err();
+    const char *note = NULL;
+    on_answer_password(&u->secret, cfg, &note);
+    sb_printf(&u->log, "  %s%s%s%s%s\n", full ? full : "?", msg ? ": " : "", msg ? msg : "", note ? " -> " : "",
+              note ? note : "");
     free(full);
     free(msg);
     td_clear_err();
@@ -354,17 +375,13 @@ static int a_upload_station(tool_ctx *c)
     if (!pc)
         return -1;
     if (arg_s(c, "readPassword") || arg_s(c, "writePassword"))
-        return fail(c, "password-protected uploads are not supported yet");
+        return fail(c, "%s", PLC_PASSWORD_ARGS);
     th up = td_service(session_project(), "Siemens.Engineering.Upload.StationUploadProvider");
     th cfg = up ? td_get_h(up, "Configuration") : 0;
     if (!cfg)
         return fail_td(c, "station upload is not available");
-    if (arg_has(c, "legacyCommunication")) {
-        int legacy = arg_b(c, "legacyCommunication", 0);
-        if (td_set(cfg, "EnableLegacyCommunication", cJSON_CreateBool(legacy)) != 0)
-            return fail_td(c, "cannot set EnableLegacyCommunication");
-        out(c, "Legacy (non-secure) PG/PC communication %s for the upload.\n", legacy ? "enabled" : "disabled");
-    }
+    if (on_apply_legacy(c, cfg, "the upload") != 0)
+        return -1;
     th pc_h = 0;
     tool_ctx probe;
     ctx_init(&probe, c->tool, NULL);
@@ -398,18 +415,18 @@ static int a_upload_station(tool_ctx *c)
         addr = td_call_h(addrs, "Create", tda("s", ip));
     if (!addr)
         return fail_td(c, "cannot create the upload address");
-    strbuf log;
-    sb_init(&log);
-    long long cb = td_register_callback(on_upload_config, &log);
+    up_ctx u;
+    sb_init(&u.log);
+    on_secret_init(&u.secret, ip);
+    long long cb = td_register_callback(on_upload_config, &u);
     progress(c, 0, 0, "uploading station");
     th res = td_call_h(up, "StationUpload", tda("hc", addr, cb));
     td_unregister_callback(cb);
     int rc = 0;
     if (!res) {
         rc = fail_td(c, "station upload failed");
-        if (strstr(td_err(), "connection") && !arg_b(c, "legacyCommunication", 0))
-            out(c, "Hint: a project that does not know the PLC yet may need legacyCommunication=true (non-secure PG/PC "
-                   "communication), if the CPU allows it.\n");
+        if (strstr(td_err(), "connection"))
+            on_legacy_hint(c);
     } else {
         cJSON *a = td_attrs(res, "State,ErrorCount,WarningCount");
         th station = td_get_h(res, "UploadedStation");
@@ -422,9 +439,10 @@ static int a_upload_station(tool_ctx *c)
         cJSON_Delete(a);
         print_result_messages(c, td_get_h(res, "Messages"), 1);
     }
-    if (log.len)
-        out(c, "Upload dialogs (left to TIA Portal):\n%s", sb_str(&log));
-    sb_free(&log);
+    if (u.log.len)
+        out(c, "Upload dialogs:\n%s", sb_str(&u.log));
+    sb_free(&u.log);
+    on_secret_free(&u.secret);
     return rc;
 }
 
@@ -436,17 +454,19 @@ static const action_def actions[] = {
       a_download_check, AF_PROJECT },
     { "download_to_device",
       "deviceName, confirm, pcInterfaceName; optional mode=software_changes|software|hardware_software|hardware, "
-      "stopModules=false, startAfterDownload=true, reinitializeDataBlocks=false, targetIp, targetInterface",
+      "stopModules=false, startAfterDownload=true, reinitializeDataBlocks=false, targetIp, targetInterface, "
+      "legacyCommunication",
       "DESTRUCTIVE. Mandatory compile pre-check. confirm='I understand this will modify the PLC'. pcInterfaceName selects "
       "the network adapter (e.g. 'PLCSIM'). TIA Portal download dialogs are answered from stopModules/startAfterDownload/"
-      "reinitializeDataBlocks; any other question cancels the download.",
-      a_download_to_device, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE },
+      "reinitializeDataBlocks; any other question cancels the download. PLC access passwords come from the Windows "
+      "Credential Manager (admin action=set_credential kind=plc key=<PLC IP>).",
+      a_download_to_device, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE | AF_NO_TX },
     { "upload_check", "", "Silent pre-flight before an upload: station upload availability and PG/PC interfaces.",
       a_upload_check, AF_PROJECT },
     { "upload_station", "modeName, pcInterfaceName, confirm; optional addressIndex=0, targetIp, legacyCommunication",
       "DESTRUCTIVE TO PROJECT (adds a device). confirm='I understand this will add a device to the project'. The station "
-      "address is targetIp or the addressIndex-th device found on the interface.",
-      a_upload_station, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE },
+      "address is targetIp or the addressIndex-th device found on the interface. PLC passwords: as for download_to_device.",
+      a_upload_station, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE | AF_NO_TX },
 };
 
 const tool_def tool_download_upload = {
@@ -465,8 +485,10 @@ const tool_def tool_download_upload = {
         "\"connectionMode\":{\"type\":\"string\",\"description\":\"download: connection mode, default PN/IE.\"},"
         "\"modeName\":{\"type\":\"string\",\"description\":\"upload_station: connection mode, e.g. PN/IE.\"},"
         "\"addressIndex\":{\"type\":\"integer\"},"
-        "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"upload_station: use legacy (non-secure) PG/PC communication.\"},"
-        "\"readPassword\":{\"type\":\"string\"},\"writePassword\":{\"type\":\"string\"}"
+        "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"download_to_device, upload_station: use legacy "
+        "(non-secure) PG/PC communication, if the CPU allows it.\"},"
+        "\"readPassword\":{\"type\":\"string\",\"description\":\"Not accepted: store PLC passwords with admin action=set_credential kind=plc.\"},"
+        "\"writePassword\":{\"type\":\"string\",\"description\":\"Not accepted: store PLC passwords with admin action=set_credential kind=plc.\"}"
         "}",
     .actions = actions,
     .nactions = COUNT_OF(actions),

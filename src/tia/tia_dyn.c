@@ -175,6 +175,7 @@ cJSON *td_request(cJSON *req)
     }
     char *resp = NULL;
     g_api.invoke(text, &resp);
+    SecureZeroMemory(text, strlen(text)); /* requests may carry passwords (SecureString arguments) */
     cJSON_free(text);
     if (!resp) {
         td_set_err("Bridge", "empty bridge response");

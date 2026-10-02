@@ -1,6 +1,7 @@
 #include "session.h"
 
 #include "app/config.h"
+#include "app/credentials.h"
 #include "tia/tia_env.h"
 #include "tia/tia_nav.h"
 #include "util/fs.h"
@@ -84,6 +85,35 @@ static void add_event(const char *kind, const char *caption, const char *text)
     LOG_I("TIA %s: %s / %s", kind, caption ? caption : "", text ? text : "");
 }
 
+/* choices is a flags enum as text, e.g. "Yes, No, Cancel". */
+static int has_choice(const char *choices, const char *name)
+{
+    size_t n = strlen(name);
+    for (const char *p = choices; p && *p;) {
+        while (*p == ' ' || *p == ',')
+            p++;
+        size_t len = strcspn(p, ", ");
+        if (len == n && _strnicmp(p, name, n) == 0)
+            return 1;
+        p += len;
+    }
+    return 0;
+}
+
+/* Answer for the configured confirmations policy, or NULL to leave the dialog to TIA. */
+static const char *pick_answer(const char *choices)
+{
+    static const char *const negative[] = { "Cancel", "No", "NoToAll", "Abort", "Ok", NULL };
+    static const char *const positive[] = { "Yes", "YesToAll", "Ok", NULL };
+    const char *const *order = g_cfg.confirmations == CONF_CANCEL ? negative
+                               : g_cfg.confirmations == CONF_ACCEPT ? positive
+                                                                    : NULL;
+    for (int i = 0; order && order[i]; i++)
+        if (has_choice(choices, order[i]))
+            return order[i];
+    return NULL;
+}
+
 static int on_confirmation(void *ctx, const cJSON *args, cJSON **result)
 {
     (void)ctx;
@@ -92,8 +122,15 @@ static int on_confirmation(void *ctx, const cJSON *args, cJSON **result)
     char *caption = td_get_s(e, "Caption");
     char *text = td_get_s(e, "Text");
     char *choices = td_get_s(e, "Choices");
+    const char *answer = pick_answer(choices);
+    if (answer && (td_set(e, "Result", cJSON_CreateString(answer)) != 0 || td_set(e, "IsHandled", cJSON_CreateTrue()) != 0)) {
+        LOG_W("cannot answer TIA confirmation: %s", td_err());
+        answer = NULL;
+    }
+    td_clear_err();
     char buf[2048];
-    snprintf(buf, sizeof buf, "%s (choices: %s; left to TIA Portal)", text ? text : "", choices ? choices : "?");
+    snprintf(buf, sizeof buf, "%s (choices: %s; %s%s)", text ? text : "", choices ? choices : "?",
+             answer ? "answered " : "left to TIA Portal", answer ? answer : "");
     add_event("confirmation", caption, buf);
     free(caption);
     free(text);
@@ -278,6 +315,79 @@ int session_ensure_portal(tool_ctx *c, int with_ui)
     return session_launch(c, with_ui);
 }
 
+typedef struct umac_ctx {
+    cred cr;
+    int answered;
+} umac_ctx;
+
+static int on_umac(void *ctx, const cJSON *args, cJSON **result)
+{
+    (void)result;
+    umac_ctx *u = ctx;
+    th credentials = tdv_h(cJSON_GetArrayItem(args, 0));
+    if (!credentials)
+        return 1;
+    td_set(credentials, "Name", cJSON_CreateString(u->cr.user));
+    td_set(credentials, "Type", cJSON_CreateString(u->cr.global ? "Global" : "Project"));
+    td_call_v(credentials, "SetPassword", tda("s", u->cr.password));
+    if (td_failed())
+        LOG_W("UMAC credentials: %s", td_err());
+    u->answered++;
+    return 0;
+}
+
+static int is_protection_error(const char *e)
+{
+    return strstr(e, "protected") || strstr(e, "not authorized") || strstr(e, "access authorization") ||
+           strstr(e, "user management") || strstr(e, "Umac");
+}
+
+th session_open_project(tool_ctx *c, const char *path, int upgrade)
+{
+    th projects = S.portal ? td_get_h(S.portal, "Projects") : 0;
+    if (!projects) {
+        fail_td(c, "cannot access the project list");
+        return 0;
+    }
+    const char *method = upgrade ? "OpenWithUpgrade" : "Open";
+    th project = td_call_h(projects, method, tda("f", path));
+    if (project)
+        return project;
+    if (strstr(td_err(), "already been opened")) {
+        fail_td(c, "the project is locked");
+        out(c, "It is open in another TIA Portal instance: use session action=get_state to find it and session action=connect "
+               "to work there. After a crash TIA Portal releases the lock about 2 minutes later.\n");
+        return 0;
+    }
+    if (!is_protection_error(td_err()))
+        return 0; /* the caller reports td_err() */
+
+    umac_ctx u;
+    memset(&u, 0, sizeof u);
+    if (cred_get(CRED_UMAC, path, &u.cr) != 0) {
+        fail(c, "the project is protected by user management (UMAC) and no credentials are stored for it. Ask the user to "
+                "enter them with admin action=set_credential kind=umac key=\"%s\" (a Windows credential dialog opens on "
+                "this PC; the password never passes through the chat), then retry.",
+             path);
+        return 0;
+    }
+    LOG_I("opening protected project as UMAC user %s (%s)", u.cr.user, u.cr.global ? "Global" : "Project");
+    long long cb = td_register_callback(on_umac, &u);
+    project = td_call_h(projects, method, tda("fc", path, cb));
+    td_unregister_callback(cb);
+    if (!project) {
+        char err[1024];
+        snprintf(err, sizeof err, "%s", td_err());
+        fail(c, "opening the protected project as '%s' failed: %s. Check the stored credentials (admin action=set_credential "
+                "kind=umac) and the user type (Project/Global).",
+             u.cr.user, err);
+    } else {
+        out(c, "Opened with user management credentials of '%s'.\n", u.cr.user);
+    }
+    cred_free(&u.cr);
+    return project;
+}
+
 th session_refresh_project(void)
 {
     if (!S.portal)
@@ -393,6 +503,122 @@ int session_prepare(tool_ctx *c, unsigned flags)
             return -1;
     }
     return 0;
+}
+
+static session_guard *g_guard; /* guard of the running call, if any */
+
+static void guard_open_tx(session_guard *g)
+{
+    g->tx = td_call_h(g->access, "Transaction", tda("hs", S.project, g->label));
+    if (!g->tx) {
+        LOG_W("no transaction for %s: %s", g->label, td_err());
+        td_clear_err();
+    }
+}
+
+int session_guard_begin(tool_ctx *c, unsigned flags, session_guard *g)
+{
+    memset(g, 0, sizeof *g);
+    if ((flags & (AF_PROJECT | AF_WRITES)) != (AF_PROJECT | AF_WRITES) || !g_cfg.exclusive_access || !S.portal || !S.project)
+        return 0;
+    snprintf(g->label, sizeof g->label, "tiaComandante: %s%s%s", c->tool->name, c->action ? "." : "",
+             c->action ? c->action->name : "");
+    g->access = td_call_h(S.portal, "ExclusiveAccess", tda("s", g->label));
+    if (!g->access)
+        return fail_td(c, "TIA Portal refused exclusive access (a dialog is open, or another Openness client holds it); "
+                          "close it and retry, or set \"exclusiveAccess\": false in config.json");
+    if (g_cfg.transactions && !(flags & AF_NO_TX))
+        guard_open_tx(g);
+    g_guard = g;
+    return 0;
+}
+
+/* Commits (or, if TIA refuses, rolls back) and closes the open transaction.
+   Returns 0 when committed. */
+static int guard_close_tx(session_guard *g, int commit)
+{
+    int ok = 0;
+    if (commit) {
+        int can = 1;
+        td_get_b(g->tx, "CanCommit", &can);
+        ok = can && td_call_v(g->tx, "CommitOnDispose", NULL) == 0;
+        if (!ok)
+            LOG_W("%s: TIA Portal refused the commit: %s", g->label, td_err());
+    }
+    if (td_call_v(g->tx, "Dispose", NULL) != 0) {
+        LOG_W("%s: closing the transaction: %s", g->label, td_err());
+        ok = 0;
+    }
+    g->tx = 0;
+    td_clear_err();
+    return ok ? 0 : -1;
+}
+
+th session_compile(th compilable)
+{
+    session_guard *g = g_guard;
+    int split = g && g->tx;
+    if (split) {
+        if (g->poisoned) {
+            guard_close_tx(g, 0); /* the call is repeated anyway: keep nothing */
+        } else if (guard_close_tx(g, 1) == 0) {
+            g->splits++;
+        } else {
+            g->poisoned = 1; /* the work so far was rolled back: the call is repeated without a transaction */
+            nav_cache_clear();
+        }
+    }
+    th result = td_call_h(compilable, "Compile", NULL);
+    if (split) {
+        char etype[128], emsg[2048];
+        snprintf(etype, sizeof etype, "%s", td_err_type());
+        snprintf(emsg, sizeof emsg, "%s", td_err());
+        guard_open_tx(g);
+        if (!result)
+            td_set_err(etype, "%s", emsg);
+    }
+    return result;
+}
+
+int session_guard_end(tool_ctx *c, session_guard *g)
+{
+    if (!g->access)
+        return 0;
+    /* Keep the error of the action for session_finish_call. */
+    char etype[128], emsg[2048];
+    snprintf(etype, sizeof etype, "%s", td_err_type());
+    snprintf(emsg, sizeof emsg, "%s", td_err());
+    int cancel = 0;
+    td_get_b(g->access, "IsCancellationRequested", &cancel);
+    if (cancel && !c->is_error)
+        fail(c, "cancelled in TIA Portal (exclusive access dialog)");
+    int rerun = 0;
+    if (g->tx || g->poisoned) {
+        int want = !c->is_error && !g->poisoned;
+        int committed = g->tx && guard_close_tx(g, want) == 0 && want;
+        int refused = want && !committed;
+        const char *rolled = g->splits ? "Rolled back the changes made after the last compile of this call.\n"
+                                       : "Rolled back: no change of this call was kept in the project.\n";
+        if ((g->poisoned || refused) && !cancel && !g->splits) {
+            rerun = 1; /* nothing of this call was kept */
+        } else if (refused || (g->poisoned && !c->is_error)) {
+            fail(c, "TIA Portal refused to commit the changes of this call (an error occurred inside its transaction)");
+            out(c, "%s", rolled);
+        } else if (c->is_error) {
+            out(c, "%s", rolled);
+        }
+        if (!committed)
+            nav_cache_clear();
+    }
+    g_guard = NULL;
+    if (td_call_v(g->access, "Dispose", NULL) != 0)
+        LOG_W("exclusive access dispose: %s", td_err());
+    if (*etype || *emsg)
+        td_set_err(etype, "%s", emsg);
+    else
+        td_clear_err();
+    memset(g, 0, sizeof *g);
+    return rerun;
 }
 
 void session_finish_call(tool_ctx *c)

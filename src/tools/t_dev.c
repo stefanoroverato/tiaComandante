@@ -106,16 +106,18 @@ static int a_eval(tool_ctx *c)
         }
         cJSON_Delete(res);
     }
-    return 0;
+    const char *f = arg_s(c, "failWith"); /* exercises the transaction rollback */
+    return f ? fail(c, "%s", f) : 0;
 }
 
 static const action_def actions[] = {
     { "add_device", "orderNumber, name; optional deviceName",
       "Create a device from the hardware catalog (e.g. 6ES7 511-1AL03-0AB0/V4.1) in the open project.", a_add_device,
       AF_PROJECT | AF_WRITES },
-    { "eval", "ops",
-      "Run raw bridge requests in sequence. Strings \"$project\", \"$portal\", \"$plc:<device>\" and \"$<as>\" become handles.",
-      a_eval, AF_PROJECT },
+    { "eval", "ops; optional failWith",
+      "Run raw bridge requests in sequence. Strings \"$project\", \"$portal\", \"$plc:<device>\" and \"$<as>\" become handles. "
+      "failWith fails the call afterwards (the transaction rolls the changes back).",
+      a_eval, AF_PROJECT | AF_WRITES },
 };
 
 const tool_def tool_dev = {
@@ -124,7 +126,7 @@ const tool_def tool_dev = {
     .summary = "Development aids (only with TIACMD_DEV=1).",
     .properties = "{"
                   "\"orderNumber\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"deviceName\":{\"type\":\"string\"},"
-                  "\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}}"
+                  "\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}},\"failWith\":{\"type\":\"string\"}"
                   "}",
     .actions = actions,
     .nactions = COUNT_OF(actions),

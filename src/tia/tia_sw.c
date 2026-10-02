@@ -296,7 +296,7 @@ int sw_export_xml(tool_ctx *c, th obj, char *path_out, size_t cap)
     if (strstr(td_err(), "nconsistent")) {
         /* Freshly imported or edited objects must be compiled before TIA exports them. */
         th comp = td_service(obj, "Siemens.Engineering.Compiler.ICompilable");
-        th result = comp ? td_call_h(comp, "Compile", NULL) : 0;
+        th result = comp ? session_compile(comp) : 0;
         if (result && td_call_v(obj, "Export", tda("fe", path_out, "Siemens.Engineering.ExportOptions", "WithDefaults")) == 0) {
             out(c, "(compiled %s first: it was inconsistent)\n", "the object");
             return 0;

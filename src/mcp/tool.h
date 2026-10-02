@@ -21,6 +21,7 @@ enum {
     AF_WRITES = 1 << 3,      /* modifies project, PLC or files: refused in read-only mode */
     AF_DESTRUCTIVE = 1 << 4, /* documented as destructive (confirm gate inside the handler) */
     AF_OFFLINE = 1 << 5,     /* refused while a device is online */
+    AF_NO_TX = 1 << 6,       /* AF_WRITES action that cannot run inside a TIA transaction (save, download, ...) */
 };
 
 typedef struct action_def {

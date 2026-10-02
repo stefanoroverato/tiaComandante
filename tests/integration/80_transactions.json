@@ -1,0 +1,14 @@
+[
+ ["dev", {"action":"eval","failWith":"intentional failure after creating TxRolledBack","_expectError":true,"ops":[
+   {"op":"get","h":"$plc:PLC_1","name":"TagTableGroup","as":"g"},
+   {"op":"get","h":"$g","name":"TagTables","as":"tt"},
+   {"op":"call","h":"$tt","name":"Create","args":["TxRolledBack"]}]}],
+ ["tag", {"action":"get_table_details","deviceName":"PLC_1","tagTableName":"TxRolledBack","_expectError":true}],
+ ["dev", {"action":"eval","ops":[
+   {"op":"get","h":"$plc:PLC_1","name":"TagTableGroup","as":"g"},
+   {"op":"get","h":"$g","name":"TagTables","as":"tt"},
+   {"op":"call","h":"$tt","name":"Create","args":["TxCommitted"]}]}],
+ ["tag", {"action":"get_table_details","deviceName":"PLC_1","tagTableName":"TxCommitted"}],
+ ["tag", {"action":"delete_table","deviceName":"PLC_1","tagTableName":"TxCommitted"}],
+ ["session", {"action":"save"}]
+]

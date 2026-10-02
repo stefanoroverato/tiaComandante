@@ -197,7 +197,23 @@ int registry_execute(tool_ctx *c, const char *tool_name)
             td_scope_begin();
             scoped = 1;
         }
-        fn(c);
+        session_guard g;
+        if (session_guard_begin(c, flags, &g) == 0) {
+            fn(c);
+            if (session_guard_end(c, &g) == 1) {
+                LOG_W("%s.%s: repeated without a transaction", t->name, action_name);
+                sb_clear(&c->out);
+                c->is_error = 0;
+                c->error_context[0] = 0;
+                td_clear_err();
+                if (session_guard_begin(c, flags | AF_NO_TX, &g) == 0) {
+                    out(c, "(TIA Portal could not keep this call in one transaction: it was rolled back and repeated "
+                           "without one)\n");
+                    fn(c);
+                    session_guard_end(c, &g);
+                }
+            }
+        }
     }
     session_finish_call(c);
     if (scoped && session_bridge_ok())

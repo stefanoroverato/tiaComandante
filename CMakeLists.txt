@@ -70,6 +70,7 @@ add_library(tccore SHARED
     src/core_main.c
     src/selftest.c
     src/app/config.c
+    src/app/credentials.c
     src/app/export_store.c
     src/app/stats.c
     src/clr/clrhost.c
@@ -108,7 +109,7 @@ add_library(tccore SHARED
     src/util/utf.c)
 target_include_directories(tccore PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set_target_properties(tccore PROPERTIES OUTPUT_NAME tiacomandante-core)
-target_link_libraries(tccore PRIVATE cjson mxml ole32 oleaut32 advapi32 shell32 shlwapi)
+target_link_libraries(tccore PRIVATE cjson mxml ole32 oleaut32 advapi32 shell32 shlwapi credui)
 if(MSVC)
     target_compile_options(tccore PRIVATE /W4 /wd4100)
     target_compile_definitions(tccore PRIVATE _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)

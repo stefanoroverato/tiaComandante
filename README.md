@@ -79,6 +79,38 @@ Sicurezza:
 - Le azioni che modificano il progetto **non si collegano mai in automatico** a un TIA in esecuzione: il target va scelto in modo esplicito con `session connect/open/create`.
 - Le operazioni distruttive richiedono una frase di conferma: `download_to_device` vuole `confirm='I understand this will modify the PLC'`.
 - **Modalità sola lettura:** con `--read-only`, con `TIACMD_READONLY=1` o con `"readOnly": true` nel file `config.json`, ogni azione di scrittura viene rifiutata.
+- **Accesso esclusivo e transazioni:** ogni azione che modifica il progetto gira dentro un `ExclusiveAccess` di TIA, che mostra un dialogo modale "tiaComandante: tool.action" con il pulsante Annulla, e dentro una transazione. In TIA la chiamata diventa un solo passo di annullamento e, se fallisce o viene annullata, tutte le sue modifiche vengono ritirate. Fanno eccezione save, save_as, download e upload, che non possono stare in una transazione.
+
+### Credenziali
+
+Le password non passano mai dagli argomenti dei tool (finirebbero nella chat). Si salvano una sola volta nel **Gestore credenziali di Windows**, con il dialogo standard di Windows:
+
+```powershell
+tiacomandante --credentials umac "C:\Progetti\Linea1\Linea1.ap21"   # utente del progetto protetto (UMAC)
+tiacomandante --credentials umac * --global                         # utente globale (UMC), per tutti i progetti
+tiacomandante --credentials plc 192.168.0.1                         # password / utente del PLC
+tiacomandante --credentials list
+tiacomandante --credentials delete plc 192.168.0.1
+```
+
+Le stesse operazioni sono disponibili dal client MCP con `admin action=set_credential|list_credentials|delete_credential`: il dialogo di Windows si apre sul PC dove gira il server.
+
+- **Progetti UMAC:** `session open` prova prima l'apertura normale; se il progetto è protetto usa le credenziali salvate per quel percorso (o `*`).
+- **PLC protetti:** `go_online`, `compare_online_offline`, `download_to_device` e `upload_station` rispondono alle richieste di password con le credenziali salvate per l'IP del PLC (o `*`). Per una password di livello di accesso senza utente usa come nome utente `-`; con un nome utente vengono usate le credenziali come utente del PLC, di progetto oppure globale con `--global`.
+- **Comunicazione legacy:** se il PLC la accetta, `legacyCommunication=true` usa la comunicazione PG/PC non sicura. Serve per esempio per caricare un PLC in un progetto che non ne conosce ancora il certificato.
+
+### Configurazione
+
+`%APPDATA%\tiaComandante\config.json` (se il file manca valgono i default):
+
+| Chiave | Default | Significato |
+|---|---|---|
+| `readOnly` | `false` | rifiuta ogni azione di scrittura |
+| `logLevel` | `"info"` | `debug`, `info`, `warn`, `error` |
+| `exclusiveAccess` | `true` | `ExclusiveAccess` di TIA intorno alle azioni che modificano il progetto |
+| `transactions` | `true` | transazione intorno a quelle azioni (un passo di annullamento, rollback in caso di errore); richiede `exclusiveAccess` |
+| `confirmations` | `"ask"` | dialoghi di conferma di TIA: `ask` li lascia all'utente in TIA, `cancel` risponde Annulla/No, `accept` risponde Sì/OK |
+| `projectsRoot`, `archivesRoot`, `exportsRoot`, `librariesRoot` | | cartelle predefinite |
 
 File:
 - Configurazione: `%APPDATA%\tiaComandante\config.json`
@@ -91,6 +123,7 @@ tiacomandante                         server MCP su stdio
 tiacomandante --call TOOL '{json}'    esegue una singola chiamata e stampa il risultato
 tiacomandante --selftest              verifica CLR, bridge e Openness con un TIA Portal V21 aperto
 tiacomandante --members TIPO          elenca i membri di un tipo Openness (aiuto allo sviluppo)
+tiacomandante --credentials list | umac [PROGETTO|*] [--global] | plc [IP|*] | delete umac|plc [CHIAVE]
 tiacomandante --read-only | --log-level debug|info|warn|error
 ```
 
@@ -109,7 +142,7 @@ tiacomandante --read-only | --log-level debug|info|warn|error
 
 - Non ancora presenti: hardware, library, technology_objects e alarm_text, l'editor di rung LAD/FBD (`networks[].rungs`, `insert_rung`, …) ed export XLSX (sono disponibili CSV e XML).
 - `live_data` (S7CommPlus) è escluso; RUN/STOP della CPU non è leggibile via Openness.
-- Online, confronto online/offline e download "solo modifiche" sono verificati con PLCSIM Advanced. `upload_station` per ora non riesce (vedi `STATUS.md`).
+- Online, confronto online/offline, download "solo modifiche" e `upload_station` (con `legacyCommunication=true`) sono verificati con PLCSIM Advanced. Le password dei PLC protetti non sono ancora state provate su un PLC reale (vedi `STATUS.md`).
 - Se nel progetto l'IP della CPU è "impostato direttamente sul dispositivo", passa `targetIp` e `pcInterfaceName` a `go_online`, `compare_online_offline` e `download_to_device`.
 
 Stato dettagliato, test da fare e lavoro mancante: [`STATUS.md`](STATUS.md).

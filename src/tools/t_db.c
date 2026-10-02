@@ -279,7 +279,7 @@ static int a_create_instance_db(tool_ctx *c)
         return fail_td(c, "creating the instance DB failed");
     th comp = td_service(db, "Siemens.Engineering.Compiler.ICompilable");
     if (comp)
-        td_call_v(comp, "Compile", NULL); /* the automatic number is assigned by the compiler */
+        session_compile(comp); /* the automatic number is assigned by the compiler */
     td_clear_err();
     long long num = 0;
     td_get_i(db, "Number", &num);

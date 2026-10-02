@@ -513,6 +513,7 @@ namespace TiaComandante.Bridge
             if (w is string)
             {
                 if (t == typeof(string)) return 4;
+                if (t == typeof(System.Security.SecureString)) return 3;
                 if (t.IsEnum) return IsEnumName(t, (string)w) ? 3 : -1;
                 if (t == typeof(FileInfo) || t == typeof(DirectoryInfo)) return 2;
                 if (t == typeof(Type)) return ResolveType((string)w) != null ? 2 : -1;
@@ -612,6 +613,13 @@ namespace TiaComandante.Bridge
             if (s != null)
             {
                 if (t == typeof(string) || t == typeof(object)) return s;
+                if (t == typeof(System.Security.SecureString))
+                {
+                    var ss = new System.Security.SecureString();
+                    foreach (char ch in s) ss.AppendChar(ch);
+                    ss.MakeReadOnly();
+                    return ss;
+                }
                 if (t.IsEnum) return Enum.Parse(t, s, true);
                 if (t == typeof(FileInfo)) return new FileInfo(s);
                 if (t == typeof(DirectoryInfo)) return new DirectoryInfo(s);

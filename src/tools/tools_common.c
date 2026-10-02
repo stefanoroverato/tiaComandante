@@ -1,5 +1,6 @@
 #include "tools.h"
 
+#include "tia/session.h"
 #include "tia/tia_dyn.h"
 
 #include <stdio.h>
@@ -125,7 +126,7 @@ int compile_object(tool_ctx *c, th obj, int errors_only)
     if (!comp)
         return td_failed() ? fail_td(c, "compiler service unavailable") : fail(c, "this object cannot be compiled");
     progress(c, 0, 0, "compiling");
-    th result = td_call_h(comp, "Compile", NULL);
+    th result = session_compile(comp);
     if (!result)
         return fail_td(c, "compilation failed");
     return report_compile(c, result, errors_only);

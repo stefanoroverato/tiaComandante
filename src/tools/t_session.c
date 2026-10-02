@@ -361,10 +361,10 @@ static int a_open(tool_ctx *c)
     }
 
     progress(c, 0, 0, "opening project");
-    th projects = td_get_h(session_portal(), "Projects");
-    const char *method = arg_b(c, "upgrade", 0) ? "OpenWithUpgrade" : "Open";
-    th project = td_call_h(projects, method, tda("f", path));
+    th project = session_open_project(c, path, arg_b(c, "upgrade", 0));
     if (!project) {
+        if (c->is_error)
+            return -1; /* already explained (e.g. protected project without credentials) */
         if (strstr(td_err(), "upgrade") || strstr(td_err(), "Upgrade") || strstr(td_err(), "version"))
             return fail(c, "opening %s failed: %s. If the project comes from an older TIA Portal version, retry with upgrade=true "
                            "(the project is converted to V21).",
@@ -725,11 +725,11 @@ static const action_def actions[] = {
       "projectPath lists the projects in the configured projects root. upgrade=true converts older projects to V21.",
       a_open, AF_BRIDGE },
     { "save", "", "Save the project. OFFLINE REQUIRED: refused while any PLC is online (diagnostics go_offline first).",
-      a_save, AF_PROJECT | AF_WRITES | AF_OFFLINE },
+      a_save, AF_PROJECT | AF_WRITES | AF_OFFLINE | AF_NO_TX },
     { "save_as", "newName; optional newParentDirectory",
       "Save a copy of the project at a new location (newParentDirectory defaults to the projects root) and continue with "
       "the copy.",
-      a_save_as, AF_PROJECT | AF_WRITES | AF_OFFLINE },
+      a_save_as, AF_PROJECT | AF_WRITES | AF_OFFLINE | AF_NO_TX },
 };
 
 const tool_def tool_session = {

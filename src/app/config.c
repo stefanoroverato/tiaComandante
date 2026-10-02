@@ -10,6 +10,14 @@
 
 tc_config g_cfg;
 
+const char *const config_confirmation_names[3] = { "ask", "cancel", "accept" };
+
+static int read_bool(const cJSON *root, const char *key, int def)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, key);
+    return cJSON_IsBool(v) ? cJSON_IsTrue(v) : def;
+}
+
 static void read_str(const cJSON *root, const char *key, char *dst, size_t cap)
 {
     const char *s = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, key));
@@ -22,6 +30,8 @@ int config_load(void)
     char dir[TC_PATH_MAX];
     memset(&g_cfg, 0, sizeof g_cfg);
     g_cfg.log_level = LOG_INFO;
+    g_cfg.exclusive_access = 1;
+    g_cfg.transactions = 1;
     if (fs_app_dir(FS_LOCAL, g_cfg.data_dir, sizeof g_cfg.data_dir) != 0)
         snprintf(g_cfg.data_dir, sizeof g_cfg.data_dir, ".");
     if (fs_app_dir(FS_ROAMING, dir, sizeof dir) != 0)
@@ -46,6 +56,12 @@ int config_load(void)
                 else if (_stricmp(lvl->valuestring, "error") == 0)
                     g_cfg.log_level = LOG_ERROR;
             }
+            g_cfg.exclusive_access = read_bool(root, "exclusiveAccess", 1);
+            g_cfg.transactions = read_bool(root, "transactions", 1);
+            const char *conf = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "confirmations"));
+            for (int i = 0; conf && i < 3; i++)
+                if (_stricmp(conf, config_confirmation_names[i]) == 0)
+                    g_cfg.confirmations = i;
             cJSON_Delete(root);
         } else {
             LOG_W("ignoring malformed %s", g_cfg.config_file);
@@ -76,6 +92,9 @@ int config_save(void)
     cJSON_AddStringToObject(root, "librariesRoot", g_cfg.libraries_root);
     cJSON_AddBoolToObject(root, "readOnly", g_cfg.read_only);
     cJSON_AddStringToObject(root, "logLevel", levels[g_cfg.log_level & 3]);
+    cJSON_AddBoolToObject(root, "exclusiveAccess", g_cfg.exclusive_access);
+    cJSON_AddBoolToObject(root, "transactions", g_cfg.transactions);
+    cJSON_AddStringToObject(root, "confirmations", config_confirmation_names[g_cfg.confirmations % 3]);
     char *text = cJSON_Print(root);
     cJSON_Delete(root);
     int rc = text ? fs_write_all(g_cfg.config_file, text, strlen(text)) : -1;

@@ -2,6 +2,7 @@
 #include "tools.h"
 
 #include "app/config.h"
+#include "app/credentials.h"
 #include "app/export_store.h"
 #include "app/stats.h"
 #include "mcp/registry.h"
@@ -206,8 +207,76 @@ static int a_get_version(tool_ctx *c)
     return 0;
 }
 
+static int credential_args(tool_ctx *c, cred_kind *kind, const char **key)
+{
+    const char *k = arg_req(c, "kind");
+    if (!k)
+        return -1;
+    if (cred_kind_parse(k, kind) != 0)
+        return fail(c, "kind must be umac (TIA project user management) or plc (PLC password)");
+    *key = arg_s(c, "key");
+    if (!*key || !**key)
+        *key = "*";
+    return 0;
+}
+
+static int a_set_credential(tool_ctx *c)
+{
+    cred_kind kind;
+    const char *key;
+    if (credential_args(c, &kind, &key) != 0)
+        return -1;
+    char msg[1200], err[256];
+    if (kind == CRED_UMAC)
+        snprintf(msg, sizeof msg, "TIA Portal user management (UMAC) credentials for project:\n%s\n\nUser type: %s",
+                 strcmp(key, "*") == 0 ? "(any project)" : key, arg_b(c, "global", 0) ? "Global (UMC)" : "Project user");
+    else
+        snprintf(msg, sizeof msg,
+                 "PLC credentials for %s\n\nAccess-level password only: user name \"-\".\nPLC user management: the PLC user "
+                 "(%s).",
+                 strcmp(key, "*") == 0 ? "any PLC" : key, arg_b(c, "global", 0) ? "global user" : "project user");
+    int rc = cred_prompt_store(kind, key, arg_b(c, "global", 0), msg, err, sizeof err);
+    if (rc == 1)
+        return fail(c, "the user cancelled the credential dialog");
+    if (rc != 0)
+        return fail(c, "%s", err);
+    out(c, "Credential stored in the Windows Credential Manager as tiaComandante/%s/%s. The password was entered only in the "
+           "Windows dialog.\n",
+        cred_kind_name(kind), key);
+    return 0;
+}
+
+static int a_list_credentials(tool_ctx *c)
+{
+    out(c, "Stored credentials (Windows Credential Manager, secrets never shown):\n");
+    cred_list(&c->out);
+    return 0;
+}
+
+static int a_delete_credential(tool_ctx *c)
+{
+    cred_kind kind;
+    const char *key;
+    if (credential_args(c, &kind, &key) != 0)
+        return -1;
+    if (cred_delete(kind, key) != 0)
+        return fail(c, "no stored credential tiaComandante/%s/%s", cred_kind_name(kind), key);
+    out(c, "Credential tiaComandante/%s/%s deleted.\n", cred_kind_name(kind), key);
+    return 0;
+}
+
 static const action_def actions[] = {
     { "clear_exports", "optional olderThanHours=24", "Delete expired exports.", a_clear_exports, 0 },
+    { "delete_credential", "kind=umac|plc; optional key", "Delete a stored credential.", a_delete_credential, 0 },
+    { "list_credentials", "", "List stored credentials (kind, key, user, type). Secrets are never shown.",
+      a_list_credentials, 0 },
+    { "set_credential", "kind=umac|plc; optional key (project path or PLC IP, default * = any), global=false",
+      "Ask the USER for credentials in the standard Windows credential dialog on this PC and store them in the Windows "
+      "Credential Manager. umac: TIA project user management login used by session open for protected projects "
+      "(global=true for UMC users). plc: PLC access password (user name \"-\") or PLC user (global=true for global "
+      "users) used by go_online, compare_online_offline, download and upload. Never ask the user to type a password in "
+      "the chat.",
+      a_set_credential, 0 },
     { "delete_export", "exportId", "Delete a single export.", a_delete_export, 0 },
     { "get_export", "exportId; optional offset, length, raw=false",
       "Retrieve export content with paging. raw=true returns content only, no metadata header.", a_get_export, 0 },
@@ -242,7 +311,10 @@ const tool_def tool_admin = {
                   "\"outputPath\":{\"type\":\"string\",\"description\":\"save_export: target file or folder.\"},"
                   "\"filePath\":{\"type\":\"string\",\"description\":\"open_file: file or folder to open.\"},"
                   "\"count\":{\"type\":\"integer\",\"description\":\"get_recent_errors: number of entries (default 10).\"},"
-                  "\"top_n\":{\"type\":\"integer\",\"description\":\"get_stats: number of entries (default 20).\"}"
+                  "\"top_n\":{\"type\":\"integer\",\"description\":\"get_stats: number of entries (default 20).\"},"
+                  "\"kind\":{\"type\":\"string\",\"enum\":[\"umac\",\"plc\"],\"description\":\"Credential kind.\"},"
+                  "\"key\":{\"type\":\"string\",\"description\":\"umac: project file path; plc: PLC IP address; default * = any.\"},"
+                  "\"global\":{\"type\":\"boolean\",\"description\":\"umac: global (UMC) user instead of a project user.\"}"
                   "}",
     .actions = actions,
     .nactions = COUNT_OF(actions),

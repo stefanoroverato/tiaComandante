@@ -80,31 +80,43 @@ static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
         return fail(c, "the online connection of %s is not configured: run diagnostics action=configure_connection, or "
                        "pass targetIp and pcInterfaceName (required when the IP is set directly at the device)",
                     plc->device_name);
+    if (on_apply_legacy(c, cfg, "going online") != 0)
+        return -1;
     progress(c, 0, 0, "going online");
     cJSON *st = NULL;
+    th addr = 0;
     if (ip && *ip) {
         th ti = on_find_target(c, cfg, arg_s(c, "mode"), arg_s(c, "pcInterfaceName"), arg_s(c, "targetInterface"), NULL);
         th addrs = ti ? td_get_h(ti, "Addresses") : 0;
-        th addr = addrs ? td_call_h(addrs, "Find", tda("s", ip)) : 0;
+        addr = addrs ? td_call_h(addrs, "Find", tda("s", ip)) : 0;
         td_clear_err();
         if (!addr && addrs)
             addr = td_call_h(addrs, "Create", tda("s", ip));
         if (!addr)
             return c->is_error ? -1 : fail_td(c, "cannot use targetIp");
-        st = td_call(op, "GoOnline", tda("h", addr));
-    } else {
-        st = td_call(op, "GoOnline", NULL);
     }
-    if (!st)
-        return fail_td(c, "going online failed");
+    char project_ip[64] = "";
+    if (!ip || !*ip)
+        on_device_ip(plc, project_ip, sizeof project_ip, NULL);
+    on_legit legit;
+    on_legitimation_begin(&legit, cfg, ip && *ip ? ip : project_ip);
+    st = addr ? td_call(op, "GoOnline", tda("h", addr)) : td_call(op, "GoOnline", NULL);
+    on_legitimation_end(c, &legit);
+    if (!st) {
+        fail_td(c, "going online failed");
+        on_legacy_hint(c);
+        return -1;
+    }
     const char *s = tdv_s(st);
     int ok = s && strcmp(s, "Online") == 0;
     if (!ok)
         fail(c, "%s is not online (state %s). Check the cable/IP, PLCSIM, or the PG/PC interface with scan_devices.",
              plc->device_name, s ? s : "?");
     cJSON_Delete(st);
-    if (!ok)
+    if (!ok) {
+        on_legacy_hint(c);
         return -1;
+    }
     *went = 1;
     return 0;
 }
@@ -344,7 +356,7 @@ static int a_compare_online_offline(tool_ctx *c)
 }
 
 static const action_def actions[] = {
-    { "compare_online_offline", "deviceName; optional includeIdentical=false, targetIp, pcInterfaceName",
+    { "compare_online_offline", "deviceName; optional includeIdentical=false, targetIp, pcInterfaceName, legacyCommunication",
       "Compare the offline project software (blocks, tags, types, technology objects) with the PLC. Read-only. Goes "
       "online automatically if needed (and back offline). Per item: Identical / Different / Only on PLC / Only in project.",
       a_compare_online_offline, AF_PROJECT },
@@ -361,9 +373,10 @@ static const action_def actions[] = {
       "configured IP. The CPU operating state (RUN/STOP) is not available through Openness.",
       a_get_plc_status, AF_PROJECT },
     { "go_offline", "deviceName", "Disconnect from the PLC.", a_go_offline, AF_PROJECT },
-    { "go_online", "deviceName; optional targetIp, pcInterfaceName",
+    { "go_online", "deviceName; optional targetIp, pcInterfaceName, legacyCommunication",
       "Connect to the PLC through the configured connection (run download_upload action=download_check first). targetIp "
-      "(with pcInterfaceName) reaches a different address than the project IP.",
+      "(with pcInterfaceName) reaches a different address than the project IP. A protected PLC gets its password / PLC "
+      "user from the Windows Credential Manager (admin action=set_credential kind=plc key=<PLC IP>).",
       a_go_online,
       AF_PROJECT },
     { "scan_devices", "optional deviceName",
@@ -385,7 +398,9 @@ const tool_def tool_diagnostics = {
         "\"targetIp\":{\"type\":\"string\"},\"targetInterface\":{\"type\":\"string\"},"
         "\"mode\":{\"type\":\"string\",\"description\":\"Connection mode, default PN/IE.\"},"
         "\"confirm\":{\"type\":\"string\"},\"skipConfirm\":{\"type\":\"boolean\"},"
-        "\"includeIdentical\":{\"type\":\"boolean\"}"
+        "\"includeIdentical\":{\"type\":\"boolean\"},"
+        "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"go_online, compare_online_offline: use legacy "
+        "(non-secure) PG/PC communication, if the CPU allows it.\"}"
         "}",
     .actions = actions,
     .nactions = COUNT_OF(actions),

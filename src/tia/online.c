@@ -1,5 +1,7 @@
 #include "online.h"
 
+#include "util/log.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,4 +166,140 @@ th on_find_target(tool_ctx *c, th configuration, const char *mode, const char *p
         return 0;
     }
     return ti;
+}
+
+int on_apply_legacy(tool_ctx *c, th configuration, const char *what)
+{
+    if (!arg_has(c, "legacyCommunication"))
+        return 0;
+    int legacy = arg_b(c, "legacyCommunication", 0);
+    if (td_set(configuration, "EnableLegacyCommunication", cJSON_CreateBool(legacy)) != 0)
+        return fail_td(c, "cannot set EnableLegacyCommunication");
+    out(c, "Legacy (non-secure) PG/PC communication %s for %s.\n", legacy ? "enabled" : "disabled", what);
+    return 0;
+}
+
+void on_legacy_hint(tool_ctx *c)
+{
+    if (!arg_b(c, "legacyCommunication", 0))
+        out(c, "Hint: if the CPU accepts it, legacyCommunication=true uses non-secure PG/PC communication (needed e.g. "
+               "when the project does not hold the PLC certificate yet).\n");
+}
+
+/* ---- PLC passwords ----------------------------------------------------------------------- */
+
+void on_secret_init(on_secret *s, const char *ip)
+{
+    memset(s, 0, sizeof *s);
+    snprintf(s->ip, sizeof s->ip, "%s", ip ? ip : "");
+}
+
+void on_secret_free(on_secret *s)
+{
+    cred_free(&s->cr);
+    memset(s, 0, sizeof *s);
+}
+
+static int secret_get(on_secret *s)
+{
+    if (!s->looked_up) {
+        s->looked_up = 1;
+        s->found = cred_get(CRED_PLC, s->ip, &s->cr) == 0 && s->cr.password;
+    }
+    return s->found;
+}
+
+int on_answer_password(on_secret *s, th cfg, const char **note)
+{
+    static const char *const simple[] = {
+        "Siemens.Engineering.Download.Configurations.ModuleReadAccessPassword",
+        "Siemens.Engineering.Download.Configurations.ModuleWriteAccessPassword",
+        "Siemens.Engineering.Upload.Configurations.UploadPasswordConfiguration",
+        "Siemens.Engineering.Online.Configurations.OnlinePasswordConfiguration",
+        NULL,
+    };
+    *note = NULL;
+    if (!cfg)
+        return -1;
+    int simple_pw = 0, auth = 0;
+    for (int i = 0; simple[i] && !simple_pw; i++)
+        simple_pw = td_is(cfg, simple[i]);
+    if (!simple_pw)
+        auth = td_is(cfg, "Siemens.Engineering.Online.Configurations.OnlineAuthenticationConfiguration");
+    if (!simple_pw && !auth) {
+        int other = td_is(cfg, "Siemens.Engineering.Download.Configurations.DownloadPasswordConfiguration");
+        td_clear_err();
+        if (other) /* block binding / master secret passwords are not PLC access passwords */
+            *note = "NOT HANDLED - this secret is not stored by tiaComandante";
+        return other ? 1 : -1;
+    }
+    if (!secret_get(s)) {
+        *note = "NOT HANDLED - no PLC credential stored (admin action=set_credential kind=plc key=<PLC IP>)";
+        return 1;
+    }
+    int rc;
+    if (simple_pw) {
+        rc = td_call_v(cfg, "SetPassword", tda("s", s->cr.password));
+        *note = "password from the Windows Credential Manager";
+    } else {
+        /* PLC user management; user name "-" (or none) = access-level password only. */
+        th oc = td_get_h(cfg, "OnlineCredentials");
+        int password_only = !s->cr.user[0] || strcmp(s->cr.user, "-") == 0;
+        const char *type = password_only ? "PasswordOnly" : s->cr.global ? "GlobalUser" : "ProjectUser";
+        rc = !oc || td_set(oc, "Type", cJSON_CreateString(type)) != 0 ||
+             (!password_only && td_set(oc, "Name", cJSON_CreateString(s->cr.user)) != 0) ||
+             td_call_v(oc, "SetPassword", tda("s", s->cr.password)) != 0;
+        *note = password_only ? "PLC password from the Windows Credential Manager"
+                              : "PLC user credentials from the Windows Credential Manager";
+    }
+    if (rc != 0) {
+        LOG_W("answering a PLC password request failed: %s", td_err());
+        *note = "NOT HANDLED - setting the stored password failed";
+    }
+    td_clear_err();
+    return rc != 0;
+}
+
+static int on_legitimation(void *ctx, const cJSON *args, cJSON **result)
+{
+    (void)result;
+    on_legit *l = ctx;
+    th cfg = tdv_h(cJSON_GetArrayItem(args, cJSON_GetArraySize(args) - 1));
+    char *full = cfg ? td_typename(cfg) : NULL;
+    const char *type = full ? (strrchr(full, '.') ? strrchr(full, '.') + 1 : full) : "?";
+    const char *note = NULL;
+    if (on_answer_password(&l->secret, cfg, &note) < 0) {
+        if (cfg && td_is(cfg, "Siemens.Engineering.Online.Configurations.TlsVerificationConfiguration"))
+            note = "NOT HANDLED - trust the PLC certificate in TIA Portal (or use legacyCommunication)";
+        else
+            note = "NOT HANDLED";
+    }
+    td_clear_err();
+    sb_printf(&l->log, "  %s: %s\n", type, note);
+    free(full);
+    return 0;
+}
+
+void on_legitimation_begin(on_legit *l, th cfg, const char *ip)
+{
+    memset(l, 0, sizeof *l);
+    on_secret_init(&l->secret, ip);
+    sb_init(&l->log);
+    l->cb = td_register_callback(on_legitimation, l);
+    l->sub = cfg ? td_subscribe(cfg, "OnlineLegitimation", l->cb) : 0;
+    if (!l->sub)
+        LOG_W("OnlineLegitimation not available: %s", td_err());
+    td_clear_err();
+}
+
+void on_legitimation_end(tool_ctx *c, on_legit *l)
+{
+    if (l->sub)
+        td_unsubscribe(l->sub);
+    if (l->cb)
+        td_unregister_callback(l->cb);
+    if (l->log.len)
+        out(c, "Online legitimation requests:\n%s", sb_str(&l->log));
+    sb_free(&l->log);
+    on_secret_free(&l->secret);
 }

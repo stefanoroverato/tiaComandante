@@ -28,6 +28,8 @@ static void usage(void)
             "  tiacomandante [options] --call TOOL [JSON] run one tool call and print the result\n"
             "  tiacomandante --selftest                   check CLR/bridge/Openness against a running TIA Portal\n"
             "  tiacomandante --members TYPE               list the members of an Openness type (development aid)\n"
+            "  tiacomandante --credentials list | umac [PROJECT|*] [--global] | plc [IP|*] | delete umac|plc [KEY]\n"
+            "                                             store credentials via the Windows credential dialog\n"
             "  tiacomandante --version\n"
             "options:\n"
             "  --read-only        refuse every action that modifies the project or the PLC\n"
@@ -74,6 +76,35 @@ static int run(int argc, char **argv)
             return 0;
         } else if (strcmp(a, "--selftest") == 0) {
             mode = a;
+        } else if (strcmp(a, "--credentials") == 0) {
+            /* --credentials list | umac [KEY] [--global] | plc [KEY] | delete umac|plc [KEY]
+               mapped onto admin set/list/delete_credential. */
+            static char json[1400];
+            cJSON *args = cJSON_CreateObject();
+            const char *sub = i + 1 < argc ? argv[++i] : "list";
+            if (strcmp(sub, "delete") == 0) {
+                cJSON_AddStringToObject(args, "action", "delete_credential");
+                cJSON_AddStringToObject(args, "kind", i + 1 < argc ? argv[++i] : "");
+            } else if (strcmp(sub, "umac") == 0 || strcmp(sub, "plc") == 0) {
+                cJSON_AddStringToObject(args, "action", "set_credential");
+                cJSON_AddStringToObject(args, "kind", sub);
+            } else {
+                cJSON_AddStringToObject(args, "action", "list_credentials");
+            }
+            while (i + 1 < argc) {
+                const char *x = argv[++i];
+                if (strcmp(x, "--global") == 0)
+                    cJSON_AddBoolToObject(args, "global", 1);
+                else
+                    cJSON_AddStringToObject(args, "key", x);
+            }
+            char *s = cJSON_PrintUnformatted(args);
+            snprintf(json, sizeof json, "%s", s ? s : "{}");
+            cJSON_free(s);
+            cJSON_Delete(args);
+            mode = "--call";
+            call_tool = "admin";
+            call_args = json;
         } else {
             usage();
             return strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0 ? 0 : 2;
