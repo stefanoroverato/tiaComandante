@@ -96,10 +96,14 @@ typedef struct dl_policy {
 
 static void policy_log(dl_policy *p, const char *phase, const char *type, const char *choice, const char *msg)
 {
+    /* TIA messages are multi-line: keep one line per answered dialog. */
+    char flat[512] = "";
+    size_t n = 0;
+    for (const char *s = msg ? msg : ""; *s && n < sizeof flat - 1; s++)
+        flat[n++] = (*s == '\r' || *s == '\n') ? ' ' : *s;
+    flat[n] = 0;
     AcquireSRWLockExclusive(&p->lock);
-    sb_printf(&p->log, "  [%s] %s -> %s%s%s\n", phase, type, choice, msg && *msg ? " (" : "", msg && *msg ? msg : "");
-    if (msg && *msg)
-        sb_append(&p->log, "");
+    sb_printf(&p->log, "  [%s] %s -> %s%s%s%s\n", phase, type, choice, *flat ? " (" : "", flat, *flat ? ")" : "");
     ReleaseSRWLockExclusive(&p->lock);
 }
 

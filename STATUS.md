@@ -34,7 +34,7 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 | xref | 6/6 | ✅ sul progetto reale |
 | watch | 14/14 | ✅ scenario 50 |
 | diagnostics | 7/7 | ✅ con PLCSIM Advanced 8.0 (scenario 70) |
-| download_upload | 4/4 | ✅ check e download "solo modifiche"; ❌ upload_station (vedi sotto) |
+| download_upload | 4/4 | ✅ check e download "solo modifiche" (con trasferimento reale di un OB e risposta automatica a ConsistentBlocksDownload); ❌ upload_station (vedi sotto) |
 
 ### Test eseguiti
 - **CTest** `mcp_protocol`: handshake, schemi dei tool, errori JSON-RPC, chiusura pulita.
@@ -46,14 +46,15 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
   - `ConnectionConfiguration.EnableLegacyCommunication`;
   - upload dalla stessa istanza TIA che ha già la fiducia nel PLC, su un progetto di prova;
   - un PLC senza protezione.
-- [ ] Download con modifiche reali che richiedono STOP: verificare la policy dei delegate (StopModules, StartModules, DataBlockReinitialization) e il messaggio quando una richiesta non viene gestita.
+- [x] Download con un blocco effettivamente modificato, senza STOP: OB caricato, richiesta `ConsistentBlocksDownload` gestita in automatico (2026-10-02).
+- [ ] Download con modifiche che richiedono STOP: verificare la policy dei delegate (StopModules, StartModules, DataBlockReinitialization) e il messaggio quando una richiesta non viene gestita. Possibile opzione "rispondi a tutto" come in pyTia (prima scelta diversa da NoAction).
 - [ ] Download `hardware` / `hardware_software` (OverwriteSystemData).
 - [ ] Download e online su un PLC reale tramite una scheda di rete fisica.
 - [ ] `go_online` senza `targetIp` su un progetto che ha l'IP nel progetto.
 - [ ] `session archive`, `save_as`, `launch`; `blocks_read export_all_xml`, `get_all_interfaces_summary` su progetti grandi (tempi).
 - [ ] Registrazione e uso reale dei client: Claude Code (`claude mcp add`), Claude Desktop, Cursor, VS Code.
 - [ ] Notifiche di progress e cancellazione con un client reale durante operazioni lunghe (compilazione, download).
-- [ ] Progetti protetti da UMAC (l'evento Authentication non è gestito).
+- [ ] Progetti protetti da UMAC: `session open` fallisce ("The project is protected. You are not authorized to open the project in write mode"). Per ora si apre il progetto dall'interfaccia di TIA, si entra con le credenziali e poi si usa `session connect`. Da implementare: `Projects.Open(FileInfo, UmacDelegate)` (`UmacCredentials`: Name, Type = Project/Global, SetPassword(SecureString)), con la password presa da variabile d'ambiente o da un prompt, mai dagli argomenti del tool.
 - [ ] Progetti multilingua: scelta della lingua per commenti e titoli.
 
 ## Da fare
