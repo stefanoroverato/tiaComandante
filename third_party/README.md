@@ -1,11 +1,11 @@
 # Librerie di terze parti
 
-Ogni libreria è un **git submodule** bloccato su un commit preciso: CMake compila direttamente i sorgenti del submodule.
+Ogni libreria è un **git submodule** che punta a un fork interno ed è bloccato su un commit preciso: CMake compila direttamente i sorgenti del submodule.
 
-| Cartella | Libreria | Licenza | Versione (tag) | Commit | URL attuale |
-|---|---|---|---|---|---|
-| `cjson/` | cJSON | MIT | v1.7.19 | `c859b25da02955fef659d658b8f324b5cde87be3` | upstream `https://github.com/DaveGamble/cJSON.git` |
-| `mxml/` | Mini-XML | Apache-2.0 | v4.0.6 | `874e249a0d3b506e883210b7ceece5316a8489d4` | upstream `https://github.com/michaelrsweet/mxml.git` |
+| Cartella | Libreria | Licenza | Versione | Commit | Fork | Upstream |
+|---|---|---|---|---|---|---|
+| `cjson/` | cJSON | MIT | v1.7.19 | `c859b25da02955fef659d658b8f324b5cde87be3` | `https://github.com/stefanoroverato/cJSON.git` | `https://github.com/DaveGamble/cJSON.git` |
+| `mxml/` | Mini-XML | Apache-2.0 | v4.0.6 | `874e249a0d3b506e883210b7ceece5316a8489d4` | `https://github.com/stefanoroverato/mxml.git` | `https://github.com/michaelrsweet/mxml.git` |
 
 Dai sorgenti si usano solo i file seguenti:
 - cJSON: `cJSON.c`, `cJSON.h`;
@@ -13,20 +13,28 @@ Dai sorgenti si usano solo i file seguenti:
 
 Mini-XML è compilato come libreria statica senza `MXML1_EXPORTS`. Il suo stato globale quindi non è thread-safe, e tiaComandante lo usa solo dal thread worker.
 
-## Passaggio ai fork interni
-
-Quando i fork esistono, si cambia solo l'URL; il commit fissato resta lo stesso:
+## Uso
 
 ```bash
-git submodule set-url third_party/cjson <URL-fork-cJSON>
-git submodule set-url third_party/mxml  <URL-fork-mxml>
-git submodule sync
-git submodule update --init
-git commit -am "third_party: use internal forks"
+git clone --recurse-submodules https://github.com/stefanoroverato/tiaComandante.git
+git submodule update --init          # dopo un pull, o in un clone fatto senza --recurse-submodules
 ```
 
-Le modifiche locali alle librerie si fanno nei fork e si annotano qui sotto.
+## Aggiornare una libreria a una nuova versione upstream
+
+```bash
+cd third_party/cjson
+git remote add upstream https://github.com/DaveGamble/cJSON.git   # solo la prima volta
+git fetch upstream --tags
+git checkout <tag-o-commit>
+git push origin HEAD:master        # porta il commit nel fork, se non c'è già
+cd ../..
+git add third_party/cjson
+git commit -m "third_party: cJSON <versione>"
+```
+
+Prima del commit nel progetto principale, ricompila ed esegui i test. Aggiorna anche la tabella qui sopra.
 
 ## Modifiche locali
 
-Nessuna.
+Nessuna. Le modifiche si fanno nei fork (commit e push nel submodule, poi `git add` del submodule nel progetto principale) e si annotano qui.

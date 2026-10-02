@@ -29,7 +29,7 @@ client MCP ──stdio──► tiacomandante.exe ──► tiacomandante-core.d
 Requisiti: CMake ≥ 3.20, Visual Studio 2022 o Build Tools (MSVC x64), .NET Framework 4.8, git.
 
 ```powershell
-git clone --recurse-submodules <url-repository> tiaComandante   # oppure, in un clone esistente:
+git clone --recurse-submodules https://github.com/stefanoroverato/tiaComandante.git   # oppure, in un clone esistente:
 git submodule update --init
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
