@@ -64,14 +64,21 @@ static int a_download_check(tool_ctx *c)
     out(c, "Device %s (PLC %s), configured IP %s, connection state %s\n", plc.device_name, plc.plc_name, *g.ip ? g.ip : "none",
         g.state);
     out(c, "[%s] PLC software present\n", g.has_plc ? "PASS" : "FAIL");
-    out(c, "[%s] online connection configured%s\n", g.configured ? "PASS" : "FAIL",
-        g.configured ? "" : " -> diagnostics action=configure_connection");
+    const char *tip = arg_s(c, "targetIp");
+    int conn_ok = g.configured || (tip && *tip);
+    if (g.configured)
+        out(c, "[PASS] online connection configured\n");
+    else if (conn_ok)
+        out(c, "[PASS] connection through targetIp %s (IP set at the device)\n", tip);
+    else
+        out(c, "[FAIL] online connection configured -> diagnostics action=configure_connection%s\n",
+            *g.ip ? "" : ", or pass targetIp (the project has no IP for this PLC)");
     if (g.compiled)
         out(c, "[%s] compilation: %d error(s)%s\n", g.compile_errors ? "FAIL" : "PASS", g.compile_errors,
             g.compile_errors ? " -> blocks_read action=get_compiler_errors" : "");
     else
         out(c, "[SKIP] compilation not verified%s\n", g.online ? " (the device is online)" : "");
-    const char *verdict = !g.has_plc || !g.configured || (g.compiled && g.compile_errors) ? "NOT READY"
+    const char *verdict = !g.has_plc || !conn_ok || (g.compiled && g.compile_errors) ? "NOT READY"
                           : !g.compiled                                                   ? "COMPILE UNVERIFIED"
                                                                                           : "READY";
     out(c, "Verdict: %s\n", verdict);
@@ -325,10 +332,15 @@ static int a_upload_station(tool_ctx *c)
     if (!cfg)
         return fail_td(c, "station upload is not available");
     th pc_h = 0;
-    if (!on_find_target(c, cfg, mode, pc, NULL, &pc_h) && !pc_h)
-        return -1;
-    c->is_error = 0;
-    sb_clear(&c->out);
+    tool_ctx probe;
+    ctx_init(&probe, c->tool, NULL);
+    on_find_target(&probe, cfg, mode, pc, NULL, &pc_h); /* upload PG/PC interfaces have no target interfaces */
+    if (!pc_h) {
+        out_raw(c, sb_str(&probe.out));
+        ctx_free(&probe);
+        return fail(c, "PG/PC interface '%s' not found in mode %s", pc, mode);
+    }
+    ctx_free(&probe);
     /* Address: explicit targetIp or the addressIndex-th accessible device. */
     const char *ip = arg_s(c, "targetIp");
     char found_ip[64] = "";
@@ -380,7 +392,7 @@ static int a_upload_station(tool_ctx *c)
 }
 
 static const action_def actions[] = {
-    { "download_check", "deviceName",
+    { "download_check", "deviceName; optional targetIp",
       "Silent pre-flight: call BEFORE any download or go_online. Checks PLC software, connection configuration and "
       "compilation. Verdicts: READY, NOT READY (a gate failed - relay it), COMPILE UNVERIFIED (device online, compilation "
       "not checked - not a pass).",

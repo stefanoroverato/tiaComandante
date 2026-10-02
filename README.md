@@ -109,4 +109,7 @@ tiacomandante --read-only | --log-level debug|info|warn|error
 
 - Non ancora presenti: hardware, library, technology_objects e alarm_text, l'editor di rung LAD/FBD (`networks[].rungs`, `insert_rung`, …) ed export XLSX (sono disponibili CSV e XML).
 - `live_data` (S7CommPlus) è escluso; RUN/STOP della CPU non è leggibile via Openness.
-- Download e confronto online sono implementati, ma vanno verificati con un PLC o con PLCSIM avviato.
+- Online, confronto online/offline e download "solo modifiche" sono verificati con PLCSIM Advanced. `upload_station` per ora non riesce (vedi `STATUS.md`).
+- Se nel progetto l'IP della CPU è "impostato direttamente sul dispositivo", passa `targetIp` e `pcInterfaceName` a `go_online`, `compare_online_offline` e `download_to_device`.
+
+Stato dettagliato, test da fare e lavoro mancante: [`STATUS.md`](STATUS.md).

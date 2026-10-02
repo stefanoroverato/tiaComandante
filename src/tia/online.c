@@ -26,6 +26,7 @@ static void node_details(ip_ctx *k, const char *iface, th node)
     char *mask = td_get_s(node, "SubnetMask");
     char *router = td_get_s(node, "RouterAddress");
     char *pnname = td_get_s(node, "PnDeviceName");
+    char *ipmode = td_get_s(node, "IpProtocolSelection");
     int use_router = 0;
     td_get_b(node, "UseRouter", &use_router);
     th subnet = td_get_h(node, "ConnectedSubnet");
@@ -33,10 +34,12 @@ static void node_details(ip_ctx *k, const char *iface, th node)
     td_clear_err();
     if (addr && *addr && !k->ip[0])
         snprintf(k->ip, k->cap, "%s", addr);
-    if (k->details && addr && *addr)
-        sb_printf(k->details, "%s  [ip=%s, mask=%s, router=%s, subnet=%s%s%s]\n", iface, addr, mask ? mask : "?",
-                  use_router && router ? router : "none", sname ? sname : "not connected", pnname && *pnname ? ", pnName=" : "",
-                  pnname && *pnname ? pnname : "");
+    if (k->details)
+        sb_printf(k->details, "%s  [ip=%s, mask=%s, router=%s, ipMode=%s, subnet=%s%s%s]\n", iface,
+                  addr && *addr ? addr : "(not set in the project)", mask && *mask ? mask : "?",
+                  use_router && router ? router : "none", ipmode ? ipmode : "?", sname ? sname : "not connected",
+                  pnname && *pnname ? ", pnName=" : "", pnname && *pnname ? pnname : "");
+    free(ipmode);
     free(addr);
     free(mask);
     free(router);
@@ -138,6 +141,8 @@ th on_find_target(tool_ctx *c, th configuration, const char *mode, const char *p
         }
         cJSON_Delete(pcs);
     }
+    if (pc_out)
+        *pc_out = pc; /* also on failure: station upload works on the PG/PC interface itself */
     th ti = 0;
     if (pc) {
         cJSON *tis = td_enum(td_get_h(pc, "TargetInterfaces"), "Name", -1);
@@ -158,7 +163,5 @@ th on_find_target(tool_ctx *c, th configuration, const char *mode, const char *p
         on_describe_interfaces(c, configuration);
         return 0;
     }
-    if (pc_out)
-        *pc_out = pc;
     return ti;
 }

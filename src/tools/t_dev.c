@@ -37,9 +37,11 @@ static th resolve_var(const char *n, var *vars, int nvars, tool_ctx *c)
         return session_project();
     if (strcmp(n, "portal") == 0)
         return session_portal();
-    if (strncmp(n, "plc:", 4) == 0) {
+    if (strncmp(n, "plc:", 4) == 0 || strncmp(n, "cpu:", 4) == 0) {
         nav_plc plc;
-        return nav_find_plc(c, session_project(), n + 4, &plc) == 0 ? plc.software : 0;
+        if (nav_find_plc(c, session_project(), n + 4, &plc) != 0)
+            return 0;
+        return n[0] == 'p' ? plc.software : plc.cpu;
     }
     for (int i = 0; i < nvars; i++)
         if (strcmp(vars[i].name, n) == 0)

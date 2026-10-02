@@ -6,6 +6,7 @@ in a single session, so TIA Portal is attached only once.
 
 Set PYTHONIOENCODING=utf-8 for correct console output."""
 import json
+import re
 import os
 import subprocess
 import sys
@@ -24,9 +25,15 @@ def main():
         calls = [(a[i], json.loads(a[i + 1])) for i in range(0, len(a), 2)]
     else:
         text = "[" + ",".join(open(fn, encoding="utf-8").read().strip()[1:-1] for fn in sys.argv[1:]) + "]"
-        # ${TEMP} and ${TS} placeholders (JSON-escaped) for reusable scenario files.
-        temp = json.dumps(os.environ.get("TEMP", "."))[1:-1]
-        text = text.replace("${TEMP}", temp).replace("${TS}", time.strftime("%H%M%S"))
+        # ${TS} and ${ENV_VAR} placeholders (JSON-escaped) for reusable scenario files,
+        # e.g. ${TEMP}, ${PLC_IP}, ${PLC_DEVICE}, ${PLC_PCIF}.
+        text = text.replace("${TS}", time.strftime("%H%M%S"))
+        def env(m):
+            v = os.environ.get(m.group(1))
+            if v is None:
+                sys.exit(f"environment variable {m.group(1)} is not set (used by the scenario)")
+            return json.dumps(v)[1:-1]
+        text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", env, text)
         calls = json.loads(text)
     p = subprocess.Popen([EXE, "--log-level", "warn"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=sys.stderr, bufsize=0)

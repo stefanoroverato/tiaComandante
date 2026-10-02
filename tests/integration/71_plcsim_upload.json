@@ -1,0 +1,9 @@
+[
+ ["session", {"action":"create","name":"tcUpload_${TS}","parentDirectory":"${TEMP}/tiaComandante/projects","withUI":false}],
+ ["diagnostics", {"action":"scan_devices"}],
+ ["download_upload", {"action":"upload_check"}],
+ ["download_upload", {"action":"upload_station","modeName":"PN/IE","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}", "_expectError":true}],
+ ["download_upload", {"action":"upload_station","modeName":"PN/IE","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","confirm":"I understand this will add a device to the project"}],
+ ["session", {"action":"list_devices"}],
+ ["blocks_read", {"action":"list","deviceName":"${PLC_DEVICE}","typeFilter":"OB"}]
+]

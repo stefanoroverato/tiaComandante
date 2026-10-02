@@ -1,0 +1,12 @@
+[
+ ["session", {"action":"connect"}],
+ ["diagnostics", {"action":"go_online","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}"}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"${PLC_DEVICE}"}],
+ ["diagnostics", {"action":"go_offline","deviceName":"${PLC_DEVICE}"}],
+ ["diagnostics", {"action":"compare_online_offline","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}"}],
+ ["download_upload", {"action":"download_check","deviceName":"${PLC_DEVICE}","targetIp":"${PLC_IP}"}],
+ ["download_upload", {"action":"download_to_device","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","mode":"software_changes", "_expectError":true}],
+ ["download_upload", {"action":"download_to_device","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}","mode":"software_changes","stopModules":false,"startAfterDownload":true,"confirm":"I understand this will modify the PLC"}],
+ ["diagnostics", {"action":"compare_online_offline","deviceName":"${PLC_DEVICE}","pcInterfaceName":"${PLC_PCIF}","targetIp":"${PLC_IP}"}],
+ ["diagnostics", {"action":"get_plc_status","deviceName":"${PLC_DEVICE}"}]
+]

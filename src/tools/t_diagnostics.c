@@ -61,27 +61,29 @@ static int a_get_plc_status(tool_ctx *c)
     return 0;
 }
 
-static int a_go_online(tool_ctx *c)
+/* Goes online with the configured connection, or with targetIp (+ pcInterfaceName)
+   through GoOnline(ConfigurationAddress) - needed when the IP is set directly at
+   the device. *went is set when this call changed the state. */
+static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
 {
-    nav_plc plc;
-    if (sw_plc(c, &plc) != 0)
-        return -1;
-    th op = on_online_provider(&plc);
-    if (!op)
-        return fail(c, "%s has no online provider", plc.device_name);
+    *went = 0;
+    char *cur = td_get_s(op, "State");
+    int already = cur && strcmp(cur, "Online") == 0;
+    free(cur);
+    if (already)
+        return 0;
     th cfg = td_get_h(op, "Configuration");
     int configured = 0;
     td_get_b(cfg, "IsConfigured", &configured);
-    if (!configured)
-        return fail(c, "the online connection of %s is not configured: run diagnostics action=configure_connection first",
-                    plc.device_name);
+    const char *ip = arg_s(c, "targetIp");
+    if (!configured && (!ip || !*ip))
+        return fail(c, "the online connection of %s is not configured: run diagnostics action=configure_connection, or "
+                       "pass targetIp and pcInterfaceName (required when the IP is set directly at the device)",
+                    plc->device_name);
     progress(c, 0, 0, "going online");
     cJSON *st = NULL;
-    const char *ip = arg_s(c, "targetIp");
     if (ip && *ip) {
-        /* A custom address on the configured PG/PC interface. */
-        th pc = 0;
-        th ti = on_find_target(c, cfg, arg_s(c, "mode"), arg_s(c, "pcInterfaceName"), NULL, &pc);
+        th ti = on_find_target(c, cfg, arg_s(c, "mode"), arg_s(c, "pcInterfaceName"), arg_s(c, "targetInterface"), NULL);
         th addrs = ti ? td_get_h(ti, "Addresses") : 0;
         th addr = addrs ? td_call_h(addrs, "Find", tda("s", ip)) : 0;
         td_clear_err();
@@ -96,11 +98,29 @@ static int a_go_online(tool_ctx *c)
     if (!st)
         return fail_td(c, "going online failed");
     const char *s = tdv_s(st);
-    out(c, "%s: %s\n", plc.device_name, s ? s : "?");
     int ok = s && strcmp(s, "Online") == 0;
+    if (!ok)
+        fail(c, "%s is not online (state %s). Check the cable/IP, PLCSIM, or the PG/PC interface with scan_devices.",
+             plc->device_name, s ? s : "?");
     cJSON_Delete(st);
     if (!ok)
-        return fail(c, "the PLC is not online (state above). Check the cable/IP, PLCSIM, or the PG/PC interface with scan_devices.");
+        return -1;
+    *went = 1;
+    return 0;
+}
+
+static int a_go_online(tool_ctx *c)
+{
+    nav_plc plc;
+    if (sw_plc(c, &plc) != 0)
+        return -1;
+    th op = on_online_provider(&plc);
+    if (!op)
+        return fail(c, "%s has no online provider", plc.device_name);
+    int went = 0;
+    if (bring_online(c, &plc, op, &went) != 0)
+        return -1;
+    out(c, "%s: Online%s\n", plc.device_name, went ? "" : " (already)");
     return 0;
 }
 
@@ -298,21 +318,35 @@ static int a_compare_online_offline(tool_ctx *c)
     nav_plc plc;
     if (sw_plc(c, &plc) != 0)
         return -1;
+    th op = on_online_provider(&plc);
+    if (!op)
+        return fail(c, "%s has no online provider", plc.device_name);
+    int went = 0;
+    if (bring_online(c, &plc, op, &went) != 0)
+        return -1;
     progress(c, 0, 0, "comparing with the PLC");
     th res = td_call_h(plc.software, "CompareToOnline", NULL);
-    if (!res)
-        return fail_td(c, "online/offline comparison failed (connection configured? PLC reachable?)");
-    int lines = 0;
-    print_compare(c, td_get_h(res, "RootElement"), 0, arg_b(c, "includeIdentical", 0), &lines);
-    if (lines > 1500)
-        out(c, "(truncated)\n");
-    return 0;
+    int rc = 0;
+    if (!res) {
+        rc = fail_td(c, "online/offline comparison failed");
+    } else {
+        int lines = 0;
+        print_compare(c, td_get_h(res, "RootElement"), 0, arg_b(c, "includeIdentical", 0), &lines);
+        if (lines > 1500)
+            out(c, "(truncated)\n");
+    }
+    if (went) {
+        td_call_v(op, "GoOffline", NULL);
+        td_clear_err();
+        out(c, "(went online for the comparison and back offline)\n");
+    }
+    return rc;
 }
 
 static const action_def actions[] = {
-    { "compare_online_offline", "deviceName; optional includeIdentical=false",
-      "Compare the offline project software (blocks, tags, types, technology objects) with the PLC. Read-only. Per item: "
-      "Identical / Different / Only on PLC / Only in project.",
+    { "compare_online_offline", "deviceName; optional includeIdentical=false, targetIp, pcInterfaceName",
+      "Compare the offline project software (blocks, tags, types, technology objects) with the PLC. Read-only. Goes "
+      "online automatically if needed (and back offline). Per item: Identical / Different / Only on PLC / Only in project.",
       a_compare_online_offline, AF_PROJECT },
     { "configure_connection", "deviceName, pcInterfaceName, confirm; optional targetIp, targetInterface, mode=PN/IE, skipConfirm=false",
       "Set the PG/PC interface and target address used to go online/download. targetIp defaults to the project-configured "
