@@ -34,7 +34,7 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 | xref | 6/6 | ✅ sul progetto reale |
 | watch | 14/14 | ✅ scenario 50 |
 | diagnostics | 7/7 | ✅ con PLCSIM Advanced 8.0 (scenario 70) |
-| download_upload | 4/4 | ✅ check e download "solo modifiche" (con trasferimento reale di un OB e risposta automatica a ConsistentBlocksDownload); ❌ upload_station (vedi sotto) |
+| download_upload | 4/4 | ✅ check, download "solo modifiche" (trasferimento reale di un OB, risposta automatica a ConsistentBlocksDownload), upload_station in un progetto nuovo con `legacyCommunication=true` |
 
 ### Test eseguiti
 - **CTest** `mcp_protocol`: handshake, schemi dei tool, errori JSON-RPC, chiusura pulita.
@@ -42,10 +42,8 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 - **Progetto reale:** solo letture, più online/confronto/download "solo modifiche" verso un PLC simulato con PLCSIM Advanced 8.0 (IP impostato sul dispositivo). Scenari 70/71 con variabili `PLC_DEVICE`, `PLC_IP`, `PLC_PCIF` (es. `PLCSIM Virtual`).
 
 ## Da provare
-- [ ] **upload_station.** Su un'istanza TIA senza interfaccia: "Online connection to PLC failed" dopo 33 s. Su un'istanza con interfaccia: resta in attesa senza alcun dialogo visibile (test interrotto dopo 10 min). Ipotesi: comunicazione sicura PG/PC o certificato del PLC non ancora considerato affidabile nella nuova istanza (Openness V21 non ha una configurazione di upload per i certificati). Prossime prove:
-  - `ConnectionConfiguration.EnableLegacyCommunication`;
-  - upload dalla stessa istanza TIA che ha già la fiducia nel PLC, su un progetto di prova;
-  - un PLC senza protezione.
+- [x] **upload_station** (2026-10-02): in un progetto vuoto l'upload dal PLCSIM riesce solo con `legacyCommunication=true` (`ConnectionConfiguration.EnableLegacyCommunication`). Senza questa opzione fallisce con "Online connection to PLC failed", perché il progetto non conosce ancora il PLC (comunicazione sicura PG/PC). Sono stati caricati hardware, gestione utenti, tag, tipi, blocchi e DB.
+- [ ] Valutare `legacyCommunication` anche per `go_online` e il download verso PLC non ancora presenti nel progetto, e documentare il requisito lato CPU (comunicazione legacy consentita).
 - [x] Download con un blocco effettivamente modificato, senza STOP: OB caricato, richiesta `ConsistentBlocksDownload` gestita in automatico (2026-10-02).
 - [ ] Download con modifiche che richiedono STOP: verificare la policy dei delegate (StopModules, StartModules, DataBlockReinitialization) e il messaggio quando una richiesta non viene gestita. Possibile opzione "rispondi a tutto" come in pyTia (prima scelta diversa da NoAction).
 - [ ] Download `hardware` / `hardware_software` (OverwriteSystemData).

@@ -170,20 +170,44 @@ static int on_download_config(void *ctx, const cJSON *args, cJSON **result, cons
 static int on_pre(void *ctx, const cJSON *args, cJSON **result) { return on_download_config(ctx, args, result, "pre"); }
 static int on_post(void *ctx, const cJSON *args, cJSON **result) { return on_download_config(ctx, args, result, "post"); }
 
-static void print_result_messages(tool_ctx *c, th messages, int depth)
+/* Prints download/upload result messages. Non-success messages are always
+   shown; plain "Success" lines are capped (an upload lists every block). */
+typedef struct msg_budget {
+    int success_shown;
+    int success_hidden;
+} msg_budget;
+
+static void print_messages_rec(tool_ctx *c, th messages, int depth, msg_budget *b)
 {
     if (!messages || depth > 8)
         return;
-    cJSON *list = td_enum(messages, "Message,State", 300);
+    cJSON *list = td_enum(messages, "Message,State", 2000);
     const cJSON *it;
     cJSON_ArrayForEach(it, list)
     {
         const char *m = tdi_s(it, "Message");
-        if (m && *m)
-            out(c, "%*s[%s] %s\n", depth * 2, "", tdi_s(it, "State") ? tdi_s(it, "State") : "?", m);
-        print_result_messages(c, td_get_h(tdv_h(it), "Messages"), depth + 1);
+        const char *st = tdi_s(it, "State");
+        if (m && *m) {
+            int plain_success = st && strcmp(st, "Success") == 0;
+            if (!plain_success || b->success_shown < 15) {
+                out(c, "%*s[%s] %s\n", depth * 2, "", st ? st : "?", m);
+                if (plain_success)
+                    b->success_shown++;
+            } else {
+                b->success_hidden++;
+            }
+        }
+        print_messages_rec(c, td_get_h(tdv_h(it), "Messages"), depth + 1, b);
     }
     cJSON_Delete(list);
+}
+
+static void print_result_messages(tool_ctx *c, th messages, int depth)
+{
+    msg_budget b = { 0, 0 };
+    print_messages_rec(c, messages, depth, &b);
+    if (b.success_hidden)
+        out(c, "%*s... and %d more [Success] message(s)\n", depth * 2, "", b.success_hidden);
 }
 
 static const char *download_options(const char *mode, int *hardware)
@@ -335,6 +359,12 @@ static int a_upload_station(tool_ctx *c)
     th cfg = up ? td_get_h(up, "Configuration") : 0;
     if (!cfg)
         return fail_td(c, "station upload is not available");
+    if (arg_has(c, "legacyCommunication")) {
+        int legacy = arg_b(c, "legacyCommunication", 0);
+        if (td_set(cfg, "EnableLegacyCommunication", cJSON_CreateBool(legacy)) != 0)
+            return fail_td(c, "cannot set EnableLegacyCommunication");
+        out(c, "Legacy (non-secure) PG/PC communication %s for the upload.\n", legacy ? "enabled" : "disabled");
+    }
     th pc_h = 0;
     tool_ctx probe;
     ctx_init(&probe, c->tool, NULL);
@@ -377,6 +407,9 @@ static int a_upload_station(tool_ctx *c)
     int rc = 0;
     if (!res) {
         rc = fail_td(c, "station upload failed");
+        if (strstr(td_err(), "connection") && !arg_b(c, "legacyCommunication", 0))
+            out(c, "Hint: a project that does not know the PLC yet may need legacyCommunication=true (non-secure PG/PC "
+                   "communication), if the CPU allows it.\n");
     } else {
         cJSON *a = td_attrs(res, "State,ErrorCount,WarningCount");
         th station = td_get_h(res, "UploadedStation");
@@ -410,7 +443,7 @@ static const action_def actions[] = {
       a_download_to_device, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE },
     { "upload_check", "", "Silent pre-flight before an upload: station upload availability and PG/PC interfaces.",
       a_upload_check, AF_PROJECT },
-    { "upload_station", "modeName, pcInterfaceName, confirm; optional addressIndex=0, targetIp",
+    { "upload_station", "modeName, pcInterfaceName, confirm; optional addressIndex=0, targetIp, legacyCommunication",
       "DESTRUCTIVE TO PROJECT (adds a device). confirm='I understand this will add a device to the project'. The station "
       "address is targetIp or the addressIndex-th device found on the interface.",
       a_upload_station, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE },
@@ -432,6 +465,7 @@ const tool_def tool_download_upload = {
         "\"connectionMode\":{\"type\":\"string\",\"description\":\"download: connection mode, default PN/IE.\"},"
         "\"modeName\":{\"type\":\"string\",\"description\":\"upload_station: connection mode, e.g. PN/IE.\"},"
         "\"addressIndex\":{\"type\":\"integer\"},"
+        "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"upload_station: use legacy (non-secure) PG/PC communication.\"},"
         "\"readPassword\":{\"type\":\"string\"},\"writePassword\":{\"type\":\"string\"}"
         "}",
     .actions = actions,
