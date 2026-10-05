@@ -24,8 +24,13 @@ void on_describe_interfaces(tool_ctx *c, th configuration);
 
 /* Applies the optional legacyCommunication argument to a ConnectionConfiguration
    (EnableLegacyCommunication: non-secure PG/PC communication, for CPUs that allow
-   it). what names the operation in the output. Returns -1 on failure. */
-int on_apply_legacy(tool_ctx *c, th configuration, const char *what);
+   it) for one operation. what names the operation in the output. *prev receives
+   the previous value for on_restore_legacy (-1 = not changed). Returns -1 on
+   failure. The setting is stored in the project and shared by the online and
+   download configurations; left on, TIA drops the configured connection when
+   going offline, so it must be restored after the operation. */
+int on_apply_legacy(tool_ctx *c, th configuration, const char *what, int *prev);
+void on_restore_legacy(th configuration, int prev);
 /* After a failed connection: suggests legacyCommunication=true when it was not used. */
 void on_legacy_hint(tool_ctx *c);
 
@@ -40,7 +45,9 @@ typedef struct on_secret {
     char ip[64];
     int looked_up;
     int found;
+    int unanswered; /* requests left without an answer */
     cred cr;
+    char note[256];
 } on_secret;
 void on_secret_init(on_secret *s, const char *ip);
 void on_secret_free(on_secret *s);
@@ -53,9 +60,10 @@ int on_answer_password(on_secret *s, th configuration, const char **note);
 typedef struct on_legit {
     on_secret secret;
     strbuf log;
-    long long cb, sub;
+    long long sub;
 } on_legit;
 void on_legitimation_begin(on_legit *l, th configuration, const char *ip);
-void on_legitimation_end(tool_ctx *c, on_legit *l);
+/* Prints the answered requests; returns how many were left unanswered. */
+int on_legitimation_end(tool_ctx *c, on_legit *l);
 
 #endif

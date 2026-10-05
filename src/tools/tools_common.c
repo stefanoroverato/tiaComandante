@@ -1,7 +1,10 @@
 #include "tools.h"
 
+#include "app/config.h"
 #include "tia/session.h"
 #include "tia/tia_dyn.h"
+#include "tia/xlsx.h"
+#include "util/fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +97,8 @@ static void walk_messages(msg_ctx *m, th messages, const char *prefix, int depth
         int leaf = cJSON_GetArraySize(peek) == 0;
         cJSON_Delete(peek);
         int relevant = state && (strcmp(state, "Error") == 0 || (!m->errors_only && strcmp(state, "Warning") == 0));
+        while (desc && (*desc == ' ' || *desc == '\t'))
+            desc++;
         if (desc && *desc && (relevant || (!m->errors_only && leaf))) {
             if (m->printed < m->limit)
                 out(m->c, "[%s] %s: %s\n", state ? state : "?", full, desc);
@@ -132,3 +137,95 @@ int compile_object(tool_ctx *c, th obj, int errors_only)
     return report_compile(c, result, errors_only);
 }
 
+void csv_field(strbuf *sb, const char *s)
+{
+    int quote = s && (strchr(s, ';') || strchr(s, '"') || strchr(s, '\n'));
+    if (quote)
+        sb_appendc(sb, '"');
+    for (const char *p = s ? s : ""; *p; p++) {
+        if (*p == '"')
+            sb_appendc(sb, '"');
+        sb_appendc(sb, *p);
+    }
+    if (quote)
+        sb_appendc(sb, '"');
+}
+
+/* Parses the ';'-separated CSV written by csv_field (optional BOM, "" quoting). */
+static cJSON *csv_rows(const char *s)
+{
+    cJSON *rows = cJSON_CreateArray();
+    if ((unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF)
+        s += 3;
+    cJSON *row = NULL;
+    strbuf cell;
+    sb_init(&cell);
+    while (*s) {
+        if (!row)
+            row = cJSON_CreateArray();
+        sb_clear(&cell);
+        if (*s == '"') {
+            for (s++; *s; s++) {
+                if (*s == '"' && s[1] == '"')
+                    sb_appendc(&cell, *s++);
+                else if (*s == '"') {
+                    s++;
+                    break;
+                } else
+                    sb_appendc(&cell, *s);
+            }
+        }
+        while (*s && *s != ';' && *s != '\r' && *s != '\n')
+            sb_appendc(&cell, *s++);
+        cJSON_AddItemToArray(row, cJSON_CreateString(sb_str(&cell)));
+        if (*s == ';') {
+            s++;
+            continue;
+        }
+        while (*s == '\r' || *s == '\n') /* end of the row */
+            s++;
+        cJSON_AddItemToArray(rows, row);
+        row = NULL;
+    }
+    if (row)
+        cJSON_AddItemToArray(rows, row);
+    sb_free(&cell);
+    return rows;
+}
+
+int deliver_table(tool_ctx *c, const strbuf *csv, const char *base_name, const char *sheet, int xlsx)
+{
+    char path[TC_PATH_MAX], name[512], err[256];
+    snprintf(name, sizeof name, "%s.%s", base_name, xlsx ? "xlsx" : "csv");
+    if (fs_temp_path("table", xlsx ? ".xlsx" : ".csv", path, sizeof path) != 0)
+        return fail(c, "cannot create a temporary file");
+    const char *outp = arg_s(c, "outputPath");
+    int rc;
+    if (xlsx) {
+        cJSON *book = cJSON_CreateArray();
+        cJSON *s = cJSON_CreateObject();
+        cJSON_AddStringToObject(s, "name", sheet);
+        cJSON_AddItemToObject(s, "rows", csv_rows(sb_str(csv)));
+        cJSON_AddItemToArray(book, s);
+        rc = xlsx_write(path, book, NULL, err, sizeof err);
+        cJSON_Delete(book);
+        if (rc != 0)
+            return fail(c, "cannot write the workbook: %s", err);
+        rc = sw_deliver(c, path, name, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", outp, 0);
+    } else {
+        if (fs_write_all(path, csv->p, csv->len) != 0)
+            return fail(c, "cannot write the CSV");
+        rc = sw_deliver(c, path, name, "text/csv", outp, arg_b(c, "returnInline", outp && *outp ? 0 : 1));
+    }
+    fs_remove(path);
+    return rc;
+}
+
+int table_format(tool_ctx *c, int *xlsx)
+{
+    const char *f = arg_s(c, "format");
+    *xlsx = f && _stricmp(f, "xlsx") == 0;
+    if (f && *f && !*xlsx && _stricmp(f, "csv") != 0)
+        return fail(c, "format must be csv or xlsx");
+    return 0;
+}

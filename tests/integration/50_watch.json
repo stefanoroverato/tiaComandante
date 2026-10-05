@@ -11,6 +11,7 @@
  ["watch", {"action":"update_entry","deviceName":"PLC_1","target":"watch","watchTableName":"WT_Main","address":"DB_W.speed","modifyValue":"42","modifyTrigger":"Permanent"}],
  ["watch", {"action":"delete_entry","deviceName":"PLC_1","target":"watch","watchTableName":"WT_Main","address":"%MW20"}],
  ["watch", {"action":"export_watch_data","deviceName":"PLC_1","watchTableName":"WT_Main"}],
+ ["watch", {"action":"export_watch_data","deviceName":"PLC_1","watchTableName":"WT_Main","format":"xlsx","outputPath":"${TEMP}/tiaComandante/out/WT_Main.xlsx"}],
  ["watch", {"action":"add_entry","deviceName":"PLC_1","target":"force","address":"Lamp","displayFormat":"Bool","forceValue":"TRUE"}],
  ["watch", {"action":"get_entries","deviceName":"PLC_1","target":"force"}],
  ["watch", {"action":"export_force_data","deviceName":"PLC_1","forceTableName":"Force table"}],

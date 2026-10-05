@@ -521,20 +521,6 @@ static int a_export_table(tool_ctx *c)
     return rc;
 }
 
-static void csv_field(strbuf *sb, const char *s)
-{
-    int quote = s && (strchr(s, ';') || strchr(s, '"') || strchr(s, '\n'));
-    if (quote)
-        sb_appendc(sb, '"');
-    for (const char *p = s ? s : ""; *p; p++) {
-        if (*p == '"')
-            sb_appendc(sb, '"');
-        sb_appendc(sb, *p);
-    }
-    if (quote)
-        sb_appendc(sb, '"');
-}
-
 static int export_data(tool_ctx *c, int force)
 {
     table_ref r;
@@ -543,9 +529,9 @@ static int export_data(tool_ctx *c, int force)
     if (r.force != force)
         return fail(c, "'%s' is a %s table: use %s", r.t.name, r.force ? "force" : "watch",
                     r.force ? "export_force_data" : "export_watch_data");
-    const char *format = arg_s(c, "format");
-    if (format && *format && _stricmp(format, "csv") != 0)
-        return fail(c, "format '%s' is not supported yet: use csv (xlsx is planned)", format);
+    int xlsx;
+    if (table_format(c, &xlsx) != 0)
+        return -1;
     mxml_node_t *top = sw_export_tree(c, r.t.item);
     if (!top)
         return -1;
@@ -572,16 +558,8 @@ static int export_data(tool_ctx *c, int force)
         sb_append(&sb, "\r\n");
     }
     mxmlDelete(top);
-    char path[1024], name[300];
-    if (fs_temp_path("watch", ".csv", path, sizeof path) != 0 || fs_write_all(path, sb.p, sb.len) != 0) {
-        sb_free(&sb);
-        return fail(c, "cannot write the CSV");
-    }
+    int rc = deliver_table(c, &sb, r.t.name, force ? "Force table" : "Watch table", xlsx);
     sb_free(&sb);
-    snprintf(name, sizeof name, "%s.csv", r.t.name);
-    const char *outp = arg_s(c, "outputPath");
-    int rc = sw_deliver(c, path, name, "text/csv", outp && *outp ? outp : NULL, 1);
-    fs_remove(path);
     return rc;
 }
 
@@ -650,12 +628,12 @@ static const action_def actions[] = {
       "Remove an entry. Pass the absolute address or the exact symbolic name (get_entries shows the stored form).",
       a_delete_entry, W },
     { "delete_table", "deviceName, watchTableName", "Delete a watch table.", a_delete_table, W | AF_DESTRUCTIVE },
-    { "export_force_data", "deviceName, forceTableName; optional format=csv, outputPath",
-      "Force table entries as CSV (inline or to outputPath). xlsx is planned.", a_export_force_data, AF_PROJECT },
+    { "export_force_data", "deviceName, forceTableName; optional format=csv|xlsx, outputPath",
+      "Force table entries as CSV (inline or to outputPath) or Excel.", a_export_force_data, AF_PROJECT },
     { "export_table", "deviceName, target, tableName, outputPath", "Export a watch/force table to SimaticML XML.",
       a_export_table, AF_PROJECT },
-    { "export_watch_data", "deviceName, watchTableName; optional format=csv, outputPath",
-      "Watch table entries as CSV (inline or to outputPath). xlsx is planned.", a_export_watch_data, AF_PROJECT },
+    { "export_watch_data", "deviceName, watchTableName; optional format=csv|xlsx, outputPath",
+      "Watch table entries as CSV (inline or to outputPath) or Excel.", a_export_watch_data, AF_PROJECT },
     { "get_entries", "deviceName, target, watchTableName|forceTableName",
       "List entries (operand, display format, modify/force value, triggers, comment; comment rows as //).", a_get_entries,
       AF_PROJECT },

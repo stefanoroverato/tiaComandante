@@ -591,7 +591,7 @@ static int a_delete_interface_member(tool_ctx *c)
     return interface_edit_finish(c, &plc, &d, b.name, msg);
 }
 
-static int a_add_multi_instance_member(tool_ctx *c)
+int bw_add_multi_instance(tool_ctx *c, const char *inner_type)
 {
     nav_plc plc;
     sw_found fb;
@@ -600,7 +600,7 @@ static int a_add_multi_instance_member(tool_ctx *c)
     if (strcmp(fb.type, "FB") != 0)
         return fail(c, "'%s' is a %s: multi-instances live in FBs", fb.name, fb.type);
     const char *name = arg_req(c, "memberName");
-    const char *inner = name ? arg_req(c, "innerType") : NULL;
+    const char *inner = name ? (inner_type ? inner_type : arg_req(c, "innerType")) : NULL;
     if (!inner)
         return -1;
     char dt[512];
@@ -627,6 +627,11 @@ static int a_add_multi_instance_member(tool_ctx *c)
     char msg[700];
     snprintf(msg, sizeof msg, "Multi-instance '%s : %s' added to %s.", name, dt, fb.name);
     return interface_edit_finish(c, &plc, &d, fb.name, msg);
+}
+
+static int a_add_multi_instance_member(tool_ctx *c)
+{
+    return bw_add_multi_instance(c, NULL);
 }
 
 static int a_remove_multi_instance_member(tool_ctx *c)

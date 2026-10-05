@@ -26,6 +26,10 @@ static const tool_def *const g_tools[] = {
     &tool_watch,
     &tool_diagnostics,
     &tool_download_upload,
+    &tool_hardware,
+    &tool_library,
+    &tool_alarm_text,
+    &tool_technology_objects,
     &tool_dev, /* must stay last: only exposed with TIACMD_DEV=1 */
 };
 

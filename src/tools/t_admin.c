@@ -3,6 +3,7 @@
 
 #include "app/config.h"
 #include "app/credentials.h"
+#include "app/devcatalog.h"
 #include "app/export_store.h"
 #include "app/stats.h"
 #include "mcp/registry.h"
@@ -265,6 +266,49 @@ static int a_delete_credential(tool_ctx *c)
     return 0;
 }
 
+static int a_search_device_catalog(tool_ctx *c)
+{
+    const char *filter = arg_s(c, "filter");
+    int limit = (int)arg_i(c, "limit", 50);
+    if (limit < 1)
+        limit = 1;
+    strbuf sb;
+    sb_init(&sb);
+    char info[256];
+    int n = dc_catalog_search(filter, limit, &sb, info, sizeof info);
+    if (n < 0) {
+        sb_free(&sb);
+        return fail(c, "no local hardware catalog yet: connect to TIA Portal and run hardware action=dump_catalog once "
+                       "(or use hardware action=search_catalog for a live search)");
+    }
+    out_raw(c, sb_str(&sb));
+    sb_free(&sb);
+    out(c, "%d match(es)%s. Source:%s\n", n, n > limit ? " (refine the filter or raise limit)" : "", info);
+    return 0;
+}
+
+static int a_reset_device_catalog(tool_ctx *c)
+{
+    dc_catalog_delete();
+    if (!session_portal()) {
+        out(c, "Local hardware catalog deleted. Connect to TIA Portal and run hardware action=dump_catalog to rebuild it.\n");
+        return 0;
+    }
+    out(c, "Local hardware catalog deleted; reading it again from TIA Portal.\n");
+    return hw_dump_catalog(c);
+}
+
+static int a_get_device_profiles(tool_ctx *c)
+{
+    strbuf sb;
+    sb_init(&sb);
+    int n = dc_profiles_list(&sb);
+    out_raw(c, sb_str(&sb));
+    sb_free(&sb);
+    out(c, "%d device profile(s) (CPUs and interface modules seen by the hardware tool).\n", n);
+    return 0;
+}
+
 static const action_def actions[] = {
     { "clear_exports", "optional olderThanHours=24", "Delete expired exports.", a_clear_exports, 0 },
     { "delete_credential", "kind=umac|plc; optional key", "Delete a stored credential.", a_delete_credential, 0 },
@@ -280,6 +324,10 @@ static const action_def actions[] = {
     { "delete_export", "exportId", "Delete a single export.", a_delete_export, 0 },
     { "get_export", "exportId; optional offset, length, raw=false",
       "Retrieve export content with paging. raw=true returns content only, no metadata header.", a_get_export, 0 },
+    { "get_device_profiles", "",
+      "All distinct CPUs and interface modules (order number, firmware, TIA version, first/last seen) met by the hardware "
+      "tool.",
+      a_get_device_profiles, 0 },
     { "get_recent_errors", "optional count=10", "Last N failed tool calls.", a_get_recent_errors, 0 },
     { "get_stats", "optional top_n=20", "Call statistics per tool+action, sorted by total calls.", a_get_stats, 0 },
     { "get_system_info", "", "OS, .NET Framework, TIA Portal version, Openness path, memory, uptime.", a_get_system_info, 0 },
@@ -289,17 +337,25 @@ static const action_def actions[] = {
       "Open a file or folder with the Windows default application. Use after an export when the user wants to inspect "
       "the result.",
       a_open_file, 0 },
+    { "reset_device_catalog", "",
+      "Delete the local copy of the hardware catalog and read it again from TIA Portal when connected.",
+      a_reset_device_catalog, 0 },
     { "save_export", "exportId, outputPath",
       "Save export content to a file (outputPath may be a folder). Afterwards ask the user whether to open it "
       "(action=open_file).",
       a_save_export, 0 },
+    { "search_device_catalog", "optional filter, limit=50",
+      "Search the local copy of the TIA hardware catalog (made by hardware action=dump_catalog) - no TIA Portal needed. "
+      "Every word of filter must match (article number, type name, version, catalog path or description).",
+      a_search_device_catalog, 0 },
 };
 
 const tool_def tool_admin = {
     .name = "admin",
     .title = "Server administration",
     .summary = "Server administration: export store (exports referenced by exportId, kept 24 h), statistics, recent "
-               "errors, system information, opening files. Needs no TIA Portal connection.",
+               "errors, system information, opening files, credentials, local hardware catalog and device profiles. Needs no TIA "
+               "Portal connection.",
     .properties = "{"
                   "\"exportId\":{\"type\":\"string\",\"description\":\"Export identifier returned by an export action.\"},"
                   "\"offset\":{\"type\":\"integer\",\"description\":\"get_export: byte offset (default 0).\"},"
@@ -307,7 +363,9 @@ const tool_def tool_admin = {
                   "\"raw\":{\"type\":\"boolean\",\"description\":\"get_export: content only, without header.\"},"
                   "\"olderThanHours\":{\"type\":\"number\",\"description\":\"clear_exports: age threshold (default 24).\"},"
                   "\"tool\":{\"type\":\"string\",\"description\":\"list_exports: filter by tool name.\"},"
-                  "\"limit\":{\"type\":\"integer\",\"description\":\"list_exports: maximum entries (default 20).\"},"
+                  "\"limit\":{\"type\":\"integer\",\"description\":\"list_exports (default 20), search_device_catalog "
+                  "(default 50): maximum entries.\"},"
+                  "\"filter\":{\"type\":\"string\",\"description\":\"search_device_catalog: words to match.\"},"
                   "\"outputPath\":{\"type\":\"string\",\"description\":\"save_export: target file or folder.\"},"
                   "\"filePath\":{\"type\":\"string\",\"description\":\"open_file: file or folder to open.\"},"
                   "\"count\":{\"type\":\"integer\",\"description\":\"get_recent_errors: number of entries (default 10).\"},"

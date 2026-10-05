@@ -80,8 +80,6 @@ static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
         return fail(c, "the online connection of %s is not configured: run diagnostics action=configure_connection, or "
                        "pass targetIp and pcInterfaceName (required when the IP is set directly at the device)",
                     plc->device_name);
-    if (on_apply_legacy(c, cfg, "going online") != 0)
-        return -1;
     progress(c, 0, 0, "going online");
     cJSON *st = NULL;
     th addr = 0;
@@ -98,10 +96,16 @@ static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
     char project_ip[64] = "";
     if (!ip || !*ip)
         on_device_ip(plc, project_ip, sizeof project_ip, NULL);
+    int legacy_prev;
+    if (on_apply_legacy(c, cfg, "going online", &legacy_prev) != 0)
+        return -1;
     on_legit legit;
     on_legitimation_begin(&legit, cfg, ip && *ip ? ip : project_ip);
     st = addr ? td_call(op, "GoOnline", tda("h", addr)) : td_call(op, "GoOnline", NULL);
-    on_legitimation_end(c, &legit);
+    int unanswered = on_legitimation_end(c, &legit);
+    on_restore_legacy(cfg, legacy_prev);
+    if (!st && unanswered)
+        return fail(c, "going online failed: the PLC asked for authentication that could not be answered (see above)");
     if (!st) {
         fail_td(c, "going online failed");
         on_legacy_hint(c);

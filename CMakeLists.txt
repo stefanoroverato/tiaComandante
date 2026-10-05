@@ -71,6 +71,7 @@ add_library(tccore SHARED
     src/selftest.c
     src/app/config.c
     src/app/credentials.c
+    src/app/devcatalog.c
     src/app/export_store.c
     src/app/stats.c
     src/clr/clrhost.c
@@ -86,8 +87,11 @@ add_library(tccore SHARED
     src/tia/tia_nav.c
     src/tia/tia_sw.c
     src/tia/simaticml.c
+    src/tia/tagaddr.c
+    src/tia/xlsx.c
     src/tools/tools_common.c
     src/tools/t_admin.c
+    src/tools/t_alarm_text.c
     src/tools/t_blocks_read.c
     src/tools/t_blocks_write.c
     src/tools/t_db.c
@@ -96,8 +100,11 @@ add_library(tccore SHARED
     src/tools/t_download_upload.c
     src/tools/t_folders.c
     src/tools/t_get_info.c
+    src/tools/t_hardware.c
+    src/tools/t_library.c
     src/tools/t_session.c
     src/tools/t_tag.c
+    src/tools/t_techobj.c
     src/tools/t_udt.c
     src/tools/t_watch.c
     src/tools/t_xref.c

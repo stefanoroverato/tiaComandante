@@ -4,6 +4,7 @@
 #include "app/export_store.h"
 #include "tia/members.h"
 #include "tia/session.h"
+#include "tia/tagaddr.h"
 #include "tia/tia_dyn.h"
 #include "tia/tia_sw.h"
 #include "util/fs.h"
@@ -441,20 +442,6 @@ static int a_move(tool_ctx *c)
 
 /* ---- export / import -------------------------------------------------------------------- */
 
-static void csv_field(strbuf *sb, const char *s)
-{
-    int quote = s && (strchr(s, ';') || strchr(s, '"') || strchr(s, '\n'));
-    if (quote)
-        sb_appendc(sb, '"');
-    for (const char *p = s ? s : ""; *p; p++) {
-        if (*p == '"')
-            sb_appendc(sb, '"');
-        sb_appendc(sb, *p);
-    }
-    if (quote)
-        sb_appendc(sb, '"');
-}
-
 static int a_export_tag_table_data(tool_ctx *c)
 {
     nav_plc plc;
@@ -475,8 +462,9 @@ static int a_export_tag_table_data(tool_ctx *c)
         fs_remove(path);
         return rc;
     }
-    if (_stricmp(format, "csv") != 0)
-        return fail(c, "format '%s' is not supported yet: use csv or xml (xlsx is planned)", format);
+    int xlsx = _stricmp(format, "xlsx") == 0;
+    if (_stricmp(format, "csv") != 0 && !xlsx)
+        return fail(c, "format '%s' is not supported: use csv, xlsx or xml", format);
     strbuf sb;
     sb_init(&sb);
     sb_append(&sb, "\xEF\xBB\xBFName;DataType;Address;Comment;Accessible;Visible;Writable\r\n");
@@ -497,14 +485,8 @@ static int a_export_tag_table_data(tool_ctx *c)
         free(cm);
     }
     cJSON_Delete(tags);
-    if (fs_temp_path("tags", ".csv", path, sizeof path) != 0 || fs_write_all(path, sb.p, sb.len) != 0) {
-        sb_free(&sb);
-        return fail(c, "cannot write the CSV");
-    }
+    int rc = deliver_table(c, &sb, t.name, "Tags", xlsx);
     sb_free(&sb);
-    snprintf(name, sizeof name, "%s.csv", t.name);
-    int rc = sw_deliver(c, path, name, "text/csv", outp, inline_);
-    fs_remove(path);
     return rc;
 }
 
@@ -547,183 +529,11 @@ static int a_import_table(tool_ctx *c)
 
 /* ---- address occupancy --------------------------------------------------------------------- */
 
-typedef struct span {
-    char area;     /* M, I, Q */
-    long byte;
-    int bit;       /* -1 for byte/word/... */
-    int size;      /* bytes (0 for a bit) */
-    char tag[200];
-    char table[200];
-} span;
-
-typedef struct spans {
-    span *v;
-    int n, cap;
-} spans;
-
-/* Parses %M10.3, %MB5, %MW20, %MD4, %IW64, %Q0.0, "%I0.0:P". */
-static int parse_address(const char *a, span *s)
+static int span_free_at(const tag_spans *sp, char area, long byte, int bit, int size)
 {
-    if (!a)
-        return -1;
-    while (*a == ' ')
-        a++;
-    if (*a == '%')
-        a++;
-    char area = (char)toupper((unsigned char)*a);
-    if (area == 'E')
-        area = 'I';
-    if (area == 'A')
-        area = 'Q';
-    if (area != 'M' && area != 'I' && area != 'Q')
-        return -1;
-    a++;
-    int size = 0;
-    char unit = (char)toupper((unsigned char)*a);
-    if (unit == 'B' || unit == 'W' || unit == 'D' || unit == 'L') {
-        size = unit == 'B' ? 1 : unit == 'W' ? 2 : unit == 'D' ? 4 : 8;
-        a++;
-    } else if (unit == 'X') {
-        a++;
-    }
-    if (!isdigit((unsigned char)*a))
-        return -1;
-    char *end;
-    long byte = strtol(a, &end, 10);
-    s->area = area;
-    s->byte = byte;
-    s->size = size;
-    s->bit = -1;
-    if (!size) {
-        if (*end != '.')
-            return -1;
-        s->bit = (int)strtol(end + 1, NULL, 10);
-    }
-    return 0;
-}
-
-static int type_size(const char *t, int *is_bit)
-{
-    *is_bit = 0;
-    if (!t || _stricmp(t, "Bool") == 0) {
-        *is_bit = 1;
-        return 0;
-    }
-    static const struct {
-        const char *n;
-        int s;
-    } sizes[] = { { "Byte", 1 },  { "Char", 1 },  { "SInt", 1 },  { "USInt", 1 }, { "Word", 2 },  { "Int", 2 },
-                  { "UInt", 2 },  { "WChar", 2 }, { "Date", 2 },  { "S5Time", 2 }, { "DWord", 4 }, { "DInt", 4 },
-                  { "UDInt", 4 }, { "Real", 4 },  { "Time", 4 },  { "TOD", 4 },   { "Time_Of_Day", 4 },
-                  { "LWord", 8 }, { "LInt", 8 },  { "ULInt", 8 }, { "LReal", 8 }, { "LTime", 8 } };
-    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++)
-        if (_stricmp(t, sizes[i].n) == 0)
-            return sizes[i].s;
-    return -1;
-}
-
-typedef struct collect_ctx {
-    spans *sp;
-    int used_only;
-} collect_ctx;
-
-static int tag_is_used(th tag)
-{
-    th svc = td_service(tag, "Siemens.Engineering.CrossReference.CrossReferenceService");
-    th res = svc ? td_call_h(svc, "GetCrossReferences", tda("e", "Siemens.Engineering.CrossReference.CrossReferenceFilter", "AllObjects")) : 0;
-    cJSON *srcs = res ? td_enum(td_get_h(res, "Sources"), NULL, -1) : NULL;
-    int used = 0;
-    const cJSON *s;
-    cJSON_ArrayForEach(s, srcs)
-    {
-        cJSON *refs = td_enum(td_get_h(tdv_h(s), "References"), NULL, -1);
-        used |= cJSON_GetArraySize(refs) > 0;
-        cJSON_Delete(refs);
-    }
-    cJSON_Delete(srcs);
-    td_clear_err();
-    return used;
-}
-
-static int collect_cb(void *ctx, const cJSON *item, const char *folder)
-{
-    (void)folder;
-    collect_ctx *k = ctx;
-    cJSON *tags = td_enum(td_get_h(tdv_h(item), "Tags"), "Name,DataTypeName,LogicalAddress", -1);
-    const cJSON *it;
-    cJSON_ArrayForEach(it, tags)
-    {
-        span s;
-        memset(&s, 0, sizeof s);
-        if (parse_address(tdi_s(it, "LogicalAddress"), &s) != 0)
-            continue;
-        if (s.size == 0 && s.bit < 0)
-            continue;
-        if (s.bit >= 0) {
-            int is_bit;
-            int sz = type_size(tdi_s(it, "DataTypeName"), &is_bit);
-            if (!is_bit && sz > 0) {
-                s.size = sz;
-                s.bit = -1;
-            }
-        }
-        if (k->used_only && !tag_is_used(tdv_h(it)))
-            continue;
-        snprintf(s.tag, sizeof s.tag, "%s", tdi_s(it, "Name") ? tdi_s(it, "Name") : "?");
-        snprintf(s.table, sizeof s.table, "%s", tdi_s(item, "Name") ? tdi_s(item, "Name") : "?");
-        if (k->sp->n == k->sp->cap) {
-            int cap = k->sp->cap ? k->sp->cap * 2 : 128;
-            span *p = realloc(k->sp->v, (size_t)cap * sizeof *p);
-            if (!p)
-                break;
-            k->sp->v = p;
-            k->sp->cap = cap;
-        }
-        k->sp->v[k->sp->n++] = s;
-    }
-    cJSON_Delete(tags);
-    return 0;
-}
-
-static int span_cmp(const void *a, const void *b)
-{
-    const span *x = a, *y = b;
-    if (x->area != y->area)
-        return x->area - y->area;
-    if (x->byte != y->byte)
-        return x->byte < y->byte ? -1 : 1;
-    return x->bit - y->bit;
-}
-
-static int overlaps(const span *a, const span *b)
-{
-    if (a->area != b->area)
-        return 0;
-    long a0 = a->byte, a1 = a->byte + (a->size ? a->size - 1 : 0);
-    long b0 = b->byte, b1 = b->byte + (b->size ? b->size - 1 : 0);
-    if (a1 < b0 || b1 < a0)
-        return 0;
-    if (a->bit >= 0 && b->bit >= 0)
-        return a->bit == b->bit && a->byte == b->byte;
-    return 1;
-}
-
-static int load_spans(tool_ctx *c, nav_plc *plc, spans *sp, int used_only)
-{
-    memset(sp, 0, sizeof *sp);
-    collect_ctx k = { sp, used_only };
-    sw_walk(plc->software, SWC_TAG_TABLES, "Name", collect_cb, NULL, &k);
-    if (sp->n > 1)
-        qsort(sp->v, (size_t)sp->n, sizeof *sp->v, span_cmp);
-    (void)c;
-    return 0;
-}
-
-static int span_free_at(const spans *sp, char area, long byte, int bit, int size)
-{
-    span probe = { area, byte, bit, size, "", "" };
+    tag_span probe = { area, byte, bit, size, "", "", "" };
     for (int i = 0; i < sp->n; i++)
-        if (overlaps(&sp->v[i], &probe))
+        if (ta_overlaps(&sp->v[i], &probe))
             return 0;
     return 1;
 }
@@ -740,13 +550,13 @@ static int a_find_next_free(tool_ctx *c)
     long start = (long)arg_i(c, "startByte", 0);
     const char *dtype = arg_s(c, "dataType");
     int is_bit;
-    int size = type_size(dtype && *dtype ? dtype : "Bool", &is_bit);
+    int size = ta_type_size(dtype && *dtype ? dtype : "Bool", &is_bit);
     if (size < 0)
         return fail(c, "unsupported dataType '%s' (use an elementary type: Bool, Byte, Word, Int, DWord, Real, ...)", dtype);
     const char *mode = arg_s(c, "mode");
     int used_only = mode && _stricmp(mode, "used") == 0;
-    spans sp;
-    load_spans(c, &plc, &sp, used_only);
+    tag_spans sp;
+    ta_load(plc.software, &sp, used_only);
     char addr[64] = "";
     for (long b = start; b < 65536 && !*addr; b++) {
         if (is_bit) {
@@ -764,7 +574,7 @@ static int a_find_next_free(tool_ctx *c)
             }
         }
     }
-    free(sp.v);
+    ta_free(&sp);
     if (!*addr)
         return fail(c, "no free address found");
     out(c, "Next free %s address in %c area from byte %ld (%s tags): %s\n", dtype && *dtype ? dtype : "Bool", area, start,
@@ -782,16 +592,16 @@ static int a_get_assignment_list(tool_ctx *c)
     const char *mode = arg_s(c, "mode");
     int used_only = mode && _stricmp(mode, "used") == 0;
     int conflicts = mode && _stricmp(mode, "conflicts") == 0;
-    spans sp;
-    load_spans(c, &plc, &sp, used_only);
+    tag_spans sp;
+    ta_load(plc.software, &sp, used_only);
     int shown = 0, nconf = 0;
     for (int i = 0; i < sp.n; i++) {
-        const span *s = &sp.v[i];
+        const tag_span *s = &sp.v[i];
         if (area && s->area != area)
             continue;
         if (conflicts) {
             for (int j = i + 1; j < sp.n; j++) {
-                if (overlaps(s, &sp.v[j])) {
+                if (ta_overlaps(s, &sp.v[j])) {
                     out(c, "CONFLICT %s (%s) <-> %s (%s)\n", s->tag, s->table, sp.v[j].tag, sp.v[j].table);
                     nconf++;
                 }
@@ -810,7 +620,7 @@ static int a_get_assignment_list(tool_ctx *c)
     else
         out(c, "%d %s address(es)%s. Hardware I/O addresses of modules are listed by the hardware tool.\n", shown,
             used_only ? "used" : "declared", area ? "" : " in M/I/Q");
-    free(sp.v);
+    ta_free(&sp);
     return 0;
 }
 
@@ -827,9 +637,9 @@ static const action_def actions[] = {
       "Delete one or several tags. REFUSES when a tag has a comment or non-default access flags unless confirm='I "
       "understand this destroys the comment' (use move to relocate tags).",
       a_delete_tag, AF_PROJECT | AF_WRITES | AF_DESTRUCTIVE },
-    { "export_tag_table_data", "deviceName, tagTableName, format=csv|xml; optional outputPath, returnInline",
-      "Export a tag table as CSV (Name;DataType;Address;Comment;Accessible;Visible;Writable) or raw TIA XML for "
-      "import_table. xlsx is not available yet.",
+    { "export_tag_table_data", "deviceName, tagTableName, format=csv|xlsx|xml; optional outputPath, returnInline",
+      "Export a tag table as CSV or Excel (Name;DataType;Address;Comment;Accessible;Visible;Writable) or raw TIA XML for "
+      "import_table.",
       a_export_tag_table_data, AF_PROJECT },
     { "find_next_free", "deviceName; optional area=M|I|Q, startByte=0, dataType=Bool, mode=declared|used",
       "Next free address. mode=declared (default, safest) skips every declared tag address; mode=used skips only tags "

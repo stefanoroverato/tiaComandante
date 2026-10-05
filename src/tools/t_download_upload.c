@@ -8,6 +8,7 @@
 #include "tia/tia_dyn.h"
 #include "tia/tia_nav.h"
 #include "tia/tia_sw.h"
+#include "util/log.h"
 #include "util/strbuf.h"
 
 #include <windows.h>
@@ -232,6 +233,26 @@ static const char *download_options(const char *mode, int *hardware)
     return NULL;
 }
 
+/* A download leaves TIA Portal with a temporary online connection that the next
+   go offline drops ("not configured"). Make the PG/PC interface just used the
+   project's online connection, as configure_connection does. */
+static void keep_connection(tool_ctx *c, const nav_plc *plc, const char *pc)
+{
+    th op = on_online_provider(plc);
+    th cfg = op ? td_get_h(op, "Configuration") : 0;
+    tool_ctx probe;
+    ctx_init(&probe, c->tool, NULL);
+    th ti = cfg ? on_find_target(&probe, cfg, arg_s(c, "connectionMode"), pc, arg_s(c, "targetInterface"), NULL) : 0;
+    ctx_free(&probe);
+    cJSON *ok = ti ? td_call(cfg, "ApplyConfiguration", tda("h", ti)) : NULL;
+    if (cJSON_IsTrue(ok))
+        out(c, "Online connection of %s set to PG/PC interface '%s' (as configure_connection).\n", plc->device_name, pc);
+    else
+        LOG_W("keeping the download connection of %s: %s", plc->device_name, td_err());
+    cJSON_Delete(ok);
+    td_clear_err();
+}
+
 static int a_download_to_device(tool_ctx *c)
 {
     nav_plc plc;
@@ -257,8 +278,6 @@ static int a_download_to_device(tool_ctx *c)
     th cfg = dp ? td_get_h(dp, "Configuration") : 0;
     if (!cfg)
         return fail_td(c, "no download provider for this device");
-    if (on_apply_legacy(c, cfg, "the download") != 0)
-        return -1;
     const char *pc = arg_s(c, "pcInterfaceName");
     th pc_h = 0;
     th target = on_find_target(c, cfg, arg_s(c, "connectionMode"), pc, arg_s(c, "targetInterface"), &pc_h);
@@ -292,16 +311,23 @@ static int a_download_to_device(tool_ctx *c)
         td_clear_err();
     }
     progress(c, 0, 0, "downloading");
-    cJSON *res;
-    if (addr)
-        res = td_call(dp, "Download", tda("hhcce", target, addr, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
-    else
-        res = td_call(dp, "Download", tda("hcce", target, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
+    cJSON *res = NULL;
+    int legacy_prev;
+    if (on_apply_legacy(c, cfg, "the download", &legacy_prev) == 0) {
+        if (addr)
+            res = td_call(dp, "Download", tda("hhcce", target, addr, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
+        else
+            res = td_call(dp, "Download", tda("hcce", target, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
+        on_restore_legacy(cfg, legacy_prev);
+    }
     td_unregister_callback(cb_pre);
     td_unregister_callback(cb_post);
 
     int rc = 0;
-    if (!res) {
+    int downloaded = res != NULL;
+    if (!res && c->is_error) {
+        rc = -1; /* legacyCommunication could not be applied */
+    } else if (!res) {
         rc = fail_td(c, "download failed");
         if (strstr(td_err(), "connection"))
             on_legacy_hint(c);
@@ -317,6 +343,8 @@ static int a_download_to_device(tool_ctx *c)
         print_result_messages(c, td_get_h(result, "Messages"), 1);
         cJSON_Delete(res);
     }
+    if (downloaded)
+        keep_connection(c, &plc, pc);
     if (p->log.len)
         out(c, "Download dialogs answered:\n%s", sb_str(&p->log));
     if (p->unhandled)
@@ -380,8 +408,6 @@ static int a_upload_station(tool_ctx *c)
     th cfg = up ? td_get_h(up, "Configuration") : 0;
     if (!cfg)
         return fail_td(c, "station upload is not available");
-    if (on_apply_legacy(c, cfg, "the upload") != 0)
-        return -1;
     th pc_h = 0;
     tool_ctx probe;
     ctx_init(&probe, c->tool, NULL);
@@ -418,10 +444,17 @@ static int a_upload_station(tool_ctx *c)
     up_ctx u;
     sb_init(&u.log);
     on_secret_init(&u.secret, ip);
+    int legacy_prev;
+    if (on_apply_legacy(c, cfg, "the upload", &legacy_prev) != 0) {
+        sb_free(&u.log);
+        on_secret_free(&u.secret);
+        return -1;
+    }
     long long cb = td_register_callback(on_upload_config, &u);
     progress(c, 0, 0, "uploading station");
     th res = td_call_h(up, "StationUpload", tda("hc", addr, cb));
     td_unregister_callback(cb);
+    on_restore_legacy(cfg, legacy_prev);
     int rc = 0;
     if (!res) {
         rc = fail_td(c, "station upload failed");

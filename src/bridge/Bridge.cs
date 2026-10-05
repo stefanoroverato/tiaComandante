@@ -520,7 +520,7 @@ namespace TiaComandante.Bridge
                 if (t == typeof(CultureInfo)) return 2;
                 if (t == typeof(object)) return 1;
                 if (t == typeof(char)) return ((string)w).Length == 1 ? 2 : -1;
-                if (t == typeof(Guid)) return 1;
+                if (t == typeof(Guid) || t == typeof(Version)) return 1;
                 if (t == typeof(TimeSpan) || t == typeof(DateTime)) return 1;
                 return -1;
             }
@@ -627,6 +627,7 @@ namespace TiaComandante.Bridge
                 if (t == typeof(CultureInfo)) return CultureInfo.GetCultureInfo(s);
                 if (t == typeof(char)) return s[0];
                 if (t == typeof(Guid)) return new Guid(s);
+                if (t == typeof(Version)) return new Version(s);
                 if (t == typeof(TimeSpan)) return TimeSpan.Parse(s, CultureInfo.InvariantCulture);
                 if (t == typeof(DateTime)) return DateTime.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             }
@@ -1098,7 +1099,8 @@ namespace TiaComandante.Bridge
                 s_subs.Remove(sub);
                 s_subEvents.Remove(sub);
             }
-            try { ev.RemoveEventHandler(kv.Key, kv.Value); } catch { }
+            try { ev.RemoveEventHandler(kv.Key, kv.Value); }
+            catch (TargetInvocationException ex) { throw Unwrap(ex); }
         }
     }
 }

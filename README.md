@@ -63,7 +63,7 @@ Workflow tipico:
 |---|---|
 | `get_info` | versione, rilevamento di TIA/Openness, stato della connessione |
 | `session` | stato, connect/launch/open/create, save/save_as/archive/close, elenco device, cartelle predefinite |
-| `admin` | archivio degli export (exportId, 24 h), statistiche, errori recenti, informazioni di sistema, open_file |
+| `admin` | archivio degli export (exportId, 24 h), statistiche, errori recenti, informazioni di sistema, open_file, credenziali, catalogo hardware locale e profili dei device |
 | `blocks_read` | elenco, dettagli, interfacce, reti (SCL come testo, LAD/FBD come elementi), export XML/sorgente, compilazione |
 | `blocks_write` | creazione FB/FC/OB (SCL da codice, LAD/FBD con reti vuote), import XML, copy/move/rename/delete, editor di interfaccia con blast radius, multi-istanze, reti |
 | `db` | DB globali e di istanza: struttura, scheda membro, membri, start value (anche di elementi di array e di DB di istanza) |
@@ -74,6 +74,10 @@ Workflow tipico:
 | `watch` | watch e force table: voci, CSV/XML, rename/move |
 | `diagnostics` | IP, configurazione della connessione, online/offline, scansione di rete, confronto online/offline |
 | `download_upload` | download con pre-check di compilazione e conferma esplicita, upload della stazione |
+| `library` | libreria di progetto e librerie globali: tipi e versioni, master copy, cartelle, istanziazione e pubblicazione, update check / update project, promozione in una libreria globale, confronto, pulizia, apertura/creazione/salvataggio/archiviazione |
+| `alarm_text` | liste di testi degli allarmi e voci, testi delle istanze di allarme, classi di allarme (via import/export Excel di TIA) |
+| `technology_objects` | oggetti tecnologici (assi, encoder, PID, contatori): elenco, creazione, parametri, connessioni hardware, compilazione, export/import, master copy |
+| `hardware` | device e moduli (slot, codice, firmware, indirizzi I/Q, canali), reti e sistemi IO, mappa I/O con i tag, compilazione, export CSV e CAx (AutomationML), impostazioni di rete, catalogo hardware |
 
 Sicurezza:
 - Le azioni che modificano il progetto **non si collegano mai in automatico** a un TIA in esecuzione: il target va scelto in modo esplicito con `session connect/open/create`.
@@ -140,9 +144,9 @@ tiacomandante --read-only | --log-level debug|info|warn|error
 
 ## Limiti della versione attuale
 
-- Non ancora presenti: hardware, library, technology_objects e alarm_text, l'editor di rung LAD/FBD (`networks[].rungs`, `insert_rung`, …) ed export XLSX (sono disponibili CSV e XML).
+- Non ancora presente: l'editor di rung LAD/FBD (`networks[].rungs`, `insert_rung`, …).
 - `live_data` (S7CommPlus) è escluso; RUN/STOP della CPU non è leggibile via Openness.
-- Online, confronto online/offline, download "solo modifiche" e `upload_station` (con `legacyCommunication=true`) sono verificati con PLCSIM Advanced. Le password dei PLC protetti non sono ancora state provate su un PLC reale (vedi `STATUS.md`).
+- Online, confronto online/offline, download "solo modifiche" e `upload_station` (con `legacyCommunication=true`) sono verificati con PLCSIM Advanced. Anche le password dei PLC protetti (online, confronto, download) sono verificate con PLCSIM; manca ancora la prova su un PLC reale (vedi `STATUS.md`).
 - Se nel progetto l'IP della CPU è "impostato direttamente sul dispositivo", passa `targetIp` e `pcInterfaceName` a `go_online`, `compare_online_offline` e `download_to_device`.
 
 Stato dettagliato, test da fare e lavoro mancante: [`STATUS.md`](STATUS.md).

@@ -18,6 +18,7 @@
  ["tag", {"action":"delete_tag","deviceName":"PLC_1","tagTableName":"Motors","tagName":"M1_Run", "_expectError":true}],
  ["tag", {"action":"delete_tag","deviceName":"PLC_1","tagTableName":"Motors","tagNames":["M1_Run","Overlap"],"confirm":"I understand this destroys the comment"}],
  ["tag", {"action":"export_tag_table_data","deviceName":"PLC_1","tagTableName":"Default tag table","format":"csv"}],
+ ["tag", {"action":"export_tag_table_data","deviceName":"PLC_1","tagTableName":"Motors","format":"xlsx","outputPath":"${TEMP}/tiaComandante/out/Motors.xlsx"}],
  ["tag", {"action":"export_tag_table_data","deviceName":"PLC_1","tagTableName":"Motors","format":"xml","outputPath":"${TEMP}/tiaComandante/out/Motors.xml"}],
  ["tag", {"action":"move_table","deviceName":"PLC_1","tagTableName":"Motors","targetFolder":""}],
  ["tag", {"action":"delete_table","deviceName":"PLC_1","tagTableName":"Motors"}],

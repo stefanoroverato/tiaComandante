@@ -558,10 +558,16 @@ static int a_archive(tool_ctx *c)
     const char *mode = arg_s(c, "archivationMode");
     if (!mode || !*mode)
         mode = "Compressed";
+    /* TIA uses targetName as the file name as given: add the extension of a compressed archive */
+    if (strstr(mode, "Compressed") && _stricmp(name + (strlen(name) > 6 ? strlen(name) - 6 : 0), ".zap21") != 0)
+        strncat(name, ".zap21", sizeof name - strlen(name) - 1);
     progress(c, 0, 0, "archiving project");
     if (td_call_v(project, "Archive", tda("Dse", full, name, "Siemens.Engineering.ProjectArchivationMode", mode)) != 0)
         return fail_td(c, "archiving failed");
-    out(c, "Archive created in %s as %s (mode %s).\n", full, name, mode);
+    char path[TC_PATH_MAX], sz[32];
+    fs_join(path, sizeof path, full, name);
+    fmt_size(fs_file_size(path), sz, sizeof sz);
+    out(c, "Archive created: %s (%s, mode %s).\n", path, fs_is_file(path) ? sz : "folder", mode);
     return 0;
 }
 

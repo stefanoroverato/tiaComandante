@@ -168,15 +168,36 @@ th on_find_target(tool_ctx *c, th configuration, const char *mode, const char *p
     return ti;
 }
 
-int on_apply_legacy(tool_ctx *c, th configuration, const char *what)
+int on_apply_legacy(tool_ctx *c, th configuration, const char *what, int *prev)
 {
+    *prev = -1;
     if (!arg_has(c, "legacyCommunication"))
         return 0;
-    int legacy = arg_b(c, "legacyCommunication", 0);
-    if (td_set(configuration, "EnableLegacyCommunication", cJSON_CreateBool(legacy)) != 0)
-        return fail_td(c, "cannot set EnableLegacyCommunication");
+    int legacy = arg_b(c, "legacyCommunication", 0), old = 0;
+    if (td_get_b(configuration, "EnableLegacyCommunication", &old) != 0)
+        return fail_td(c, "cannot read EnableLegacyCommunication");
+    if (old != legacy) {
+        if (td_set(configuration, "EnableLegacyCommunication", cJSON_CreateBool(legacy)) != 0)
+            return fail_td(c, "cannot set EnableLegacyCommunication");
+        *prev = old;
+    }
     out(c, "Legacy (non-secure) PG/PC communication %s for %s.\n", legacy ? "enabled" : "disabled", what);
     return 0;
+}
+
+void on_restore_legacy(th configuration, int prev)
+{
+    if (prev < 0)
+        return;
+    char etype[128], emsg[1024];
+    snprintf(etype, sizeof etype, "%s", td_err_type());
+    snprintf(emsg, sizeof emsg, "%s", td_err());
+    if (td_set(configuration, "EnableLegacyCommunication", cJSON_CreateBool(prev)) != 0)
+        LOG_W("restoring EnableLegacyCommunication: %s", td_err());
+    if (*etype || *emsg)
+        td_set_err(etype, "%s", emsg);
+    else
+        td_clear_err();
 }
 
 void on_legacy_hint(tool_ctx *c)
@@ -207,6 +228,24 @@ static int secret_get(on_secret *s)
         s->found = cred_get(CRED_PLC, s->ip, &s->cr) == 0 && s->cr.password;
     }
     return s->found;
+}
+
+/* User types accepted by the PLC, e.g. "PasswordOnly" or "ProjectUser, GlobalUser". */
+static void supported_types(th cfg, char *buf, size_t cap)
+{
+    buf[0] = 0;
+    th list = td_call_h(cfg, "GetSupportedAuthenticationTypes", NULL);
+    cJSON *items = list ? td_enum(list, "CurrentUserType", -1) : NULL;
+    size_t n = 0;
+    const cJSON *it;
+    cJSON_ArrayForEach(it, items)
+    {
+        const char *t = tdi_s(it, "CurrentUserType");
+        if (t && n < cap)
+            n += (size_t)snprintf(buf + n, cap - n, "%s%s", n ? ", " : "", t);
+    }
+    cJSON_Delete(items);
+    td_clear_err();
 }
 
 int on_answer_password(on_secret *s, th cfg, const char **note)
@@ -242,15 +281,21 @@ int on_answer_password(on_secret *s, th cfg, const char **note)
         rc = td_call_v(cfg, "SetPassword", tda("s", s->cr.password));
         *note = "password from the Windows Credential Manager";
     } else {
-        /* PLC user management; user name "-" (or none) = access-level password only. */
-        th oc = td_get_h(cfg, "OnlineCredentials");
-        int password_only = !s->cr.user[0] || strcmp(s->cr.user, "-") == 0;
+        /* PLC user management, or an access-level password only: user name "-"
+           (or none), or a PLC that lists no user types (an S7-1500 with access
+           levels reports only AnonymousUser and accepts PasswordOnly). */
+        char types[160] = "";
+        supported_types(cfg, types, sizeof types);
+        int user_types = strstr(types, "ProjectUser") || strstr(types, "GlobalUser");
+        int password_only = !s->cr.user[0] || strcmp(s->cr.user, "-") == 0 || (*types && !user_types);
         const char *type = password_only ? "PasswordOnly" : s->cr.global ? "GlobalUser" : "ProjectUser";
+        th oc = td_get_h(cfg, "OnlineCredentials");
         rc = !oc || td_set(oc, "Type", cJSON_CreateString(type)) != 0 ||
              (!password_only && td_set(oc, "Name", cJSON_CreateString(s->cr.user)) != 0) ||
              td_call_v(oc, "SetPassword", tda("s", s->cr.password)) != 0;
-        *note = password_only ? "PLC password from the Windows Credential Manager"
-                              : "PLC user credentials from the Windows Credential Manager";
+        snprintf(s->note, sizeof s->note, "%s from the Windows Credential Manager (%s; PLC supports: %s)",
+                 password_only ? "PLC password" : "PLC user credentials", type, *types ? types : "?");
+        *note = s->note;
     }
     if (rc != 0) {
         LOG_W("answering a PLC password request failed: %s", td_err());
@@ -260,20 +305,34 @@ int on_answer_password(on_secret *s, th cfg, const char **note)
     return rc != 0;
 }
 
+/* TIA Portal keeps calling OnlineLegitimation handlers after they are removed,
+   e.g. during a later download: one permanent callback answers only while an
+   online call is in progress (g_legit) and ignores the requests otherwise. */
+static long long g_legit_cb;
+static on_legit *volatile g_legit;
+
 static int on_legitimation(void *ctx, const cJSON *args, cJSON **result)
 {
+    (void)ctx;
     (void)result;
-    on_legit *l = ctx;
+    on_legit *l = g_legit;
+    if (!l) {
+        LOG_D("OnlineLegitimation outside an online call: ignored");
+        return 0;
+    }
     th cfg = tdv_h(cJSON_GetArrayItem(args, cJSON_GetArraySize(args) - 1));
     char *full = cfg ? td_typename(cfg) : NULL;
     const char *type = full ? (strrchr(full, '.') ? strrchr(full, '.') + 1 : full) : "?";
     const char *note = NULL;
-    if (on_answer_password(&l->secret, cfg, &note) < 0) {
+    int rc = on_answer_password(&l->secret, cfg, &note);
+    if (rc < 0) {
         if (cfg && td_is(cfg, "Siemens.Engineering.Online.Configurations.TlsVerificationConfiguration"))
             note = "NOT HANDLED - trust the PLC certificate in TIA Portal (or use legacyCommunication)";
         else
             note = "NOT HANDLED";
     }
+    if (rc != 0)
+        l->secret.unanswered++;
     td_clear_err();
     sb_printf(&l->log, "  %s: %s\n", type, note);
     free(full);
@@ -285,21 +344,24 @@ void on_legitimation_begin(on_legit *l, th cfg, const char *ip)
     memset(l, 0, sizeof *l);
     on_secret_init(&l->secret, ip);
     sb_init(&l->log);
-    l->cb = td_register_callback(on_legitimation, l);
-    l->sub = cfg ? td_subscribe(cfg, "OnlineLegitimation", l->cb) : 0;
+    if (!g_legit_cb)
+        g_legit_cb = td_register_callback(on_legitimation, NULL);
+    g_legit = l;
+    l->sub = cfg ? td_subscribe(cfg, "OnlineLegitimation", g_legit_cb) : 0;
     if (!l->sub)
         LOG_W("OnlineLegitimation not available: %s", td_err());
     td_clear_err();
 }
 
-void on_legitimation_end(tool_ctx *c, on_legit *l)
+int on_legitimation_end(tool_ctx *c, on_legit *l)
 {
+    g_legit = NULL;
+    int unanswered = l->secret.unanswered;
     if (l->sub)
         td_unsubscribe(l->sub);
-    if (l->cb)
-        td_unregister_callback(l->cb);
     if (l->log.len)
         out(c, "Online legitimation requests:\n%s", sb_str(&l->log));
     sb_free(&l->log);
     on_secret_free(&l->secret);
+    return unanswered;
 }

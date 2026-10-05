@@ -424,7 +424,10 @@ void td_unsubscribe(long long sub)
 {
     cJSON *r = req_new("unsubscribe");
     cJSON_AddNumberToObject(r, "sub", (double)sub);
-    cJSON_Delete(td_request(r));
+    cJSON *res = td_request(r);
+    if (!res)
+        LOG_W("unsubscribe %lld: %s", sub, td_err());
+    cJSON_Delete(res);
 }
 
 th td_delegate(const char *type, long long cb)
