@@ -7,6 +7,8 @@ Ogni libreria è un **git submodule** che punta a un fork interno ed è bloccato
 | `cjson/` | cJSON | MIT | v1.7.19 | `c859b25da02955fef659d658b8f324b5cde87be3` | `https://github.com/stefanoroverato/cJSON.git` | `https://github.com/DaveGamble/cJSON.git` |
 | `mxml/` | Mini-XML | Apache-2.0 | v4.0.6 | `874e249a0d3b506e883210b7ceece5316a8489d4` | `https://github.com/stefanoroverato/mxml.git` | `https://github.com/michaelrsweet/mxml.git` |
 
+Testi delle licenze e avvisi da riportare con i binari: [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
 Dai sorgenti si usano solo i file seguenti:
 - cJSON: `cJSON.c`, `cJSON.h`;
 - Mini-XML: `mxml-*.c`, `mxml-private.h`, `mxml.h`, `vcnet/config.h`.

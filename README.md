@@ -150,3 +150,11 @@ tiacomandante --read-only | --log-level debug|info|warn|error
 - Se nel progetto l'IP della CPU è "impostato direttamente sul dispositivo", passa `targetIp` e `pcInterfaceName` a `go_online`, `compare_online_offline` e `download_to_device`.
 
 Stato dettagliato, test da fare e lavoro mancante: [`STATUS.md`](STATUS.md).
+
+## Licenza
+
+tiaComandante è distribuito con licenza [Apache 2.0](LICENSE). Copyright 2026 Stefano Roverato.
+
+Le librerie di terze parti mantengono le proprie licenze (cJSON: MIT; Mini-XML: Apache 2.0): testi e avvisi in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) e [`NOTICE`](NOTICE). Gli assembly Openness di Siemens non fanno parte del progetto: vengono caricati dall'installazione di TIA Portal.
+
+TIA Portal, SIMATIC e STEP 7 sono marchi di Siemens AG. tiaComandante non è affiliato a Siemens né approvato da Siemens.
