@@ -6,6 +6,7 @@
 #include "tia/tia_dyn.h"
 #include "tia/tia_nav.h"
 #include "tia/tia_sw.h"
+#include "util/log.h"
 #include "util/strbuf.h"
 
 #include <stdio.h>
@@ -61,6 +62,17 @@ static int a_get_plc_status(tool_ctx *c)
     return 0;
 }
 
+/* After a failed GoOnline the provider can stay in a connecting/online state, and TIA Portal then
+   refuses compile, save and download ("not permitted in online mode"): go back offline. */
+static void leave_online(th op)
+{
+    char *s = td_get_s(op, "State");
+    if (s && strcmp(s, "Offline") != 0 && td_call_v(op, "GoOffline", NULL) != 0)
+        LOG_W("going offline after a failed GoOnline: %s", td_err());
+    free(s);
+    td_clear_err();
+}
+
 /* Goes online with the configured connection, or with targetIp (+ pcInterfaceName)
    through GoOnline(ConfigurationAddress) - needed when the IP is set directly at
    the device. *went is set when this call changed the state. */
@@ -101,12 +113,21 @@ static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
         return -1;
     on_legit legit;
     on_legitimation_begin(&legit, cfg, ip && *ip ? ip : project_ip);
+    legit.trust_certificate = arg_b(c, "trustPlcCertificate", 0);
     st = addr ? td_call(op, "GoOnline", tda("h", addr)) : td_call(op, "GoOnline", NULL);
+    /* The cleanup calls below would overwrite the GoOnline error. */
+    char err[1024] = "", etype[256] = "";
+    if (!st) {
+        snprintf(err, sizeof err, "%s", td_err());
+        snprintf(etype, sizeof etype, "%s", td_err_type());
+    }
     int unanswered = on_legitimation_end(c, &legit);
     on_restore_legacy(cfg, legacy_prev);
-    if (!st && unanswered)
-        return fail(c, "going online failed: the PLC asked for authentication that could not be answered (see above)");
     if (!st) {
+        leave_online(op);
+        if (unanswered)
+            return fail(c, "going online failed: the PLC asked for authentication that could not be answered (see above)");
+        td_set_err(etype, "%s", err);
         fail_td(c, "going online failed");
         on_legacy_hint(c);
         return -1;
@@ -118,6 +139,7 @@ static int bring_online(tool_ctx *c, nav_plc *plc, th op, int *went)
              plc->device_name, s ? s : "?");
     cJSON_Delete(st);
     if (!ok) {
+        leave_online(op);
         on_legacy_hint(c);
         return -1;
     }
@@ -360,7 +382,8 @@ static int a_compare_online_offline(tool_ctx *c)
 }
 
 static const action_def actions[] = {
-    { "compare_online_offline", "deviceName; optional includeIdentical=false, targetIp, pcInterfaceName, legacyCommunication",
+    { "compare_online_offline",
+      "deviceName; optional includeIdentical=false, targetIp, pcInterfaceName, legacyCommunication, trustPlcCertificate",
       "Compare the offline project software (blocks, tags, types, technology objects) with the PLC. Read-only. Goes "
       "online automatically if needed (and back offline). Per item: Identical / Different / Only on PLC / Only in project.",
       a_compare_online_offline, AF_PROJECT },
@@ -377,7 +400,7 @@ static const action_def actions[] = {
       "configured IP. The CPU operating state (RUN/STOP) is not available through Openness.",
       a_get_plc_status, AF_PROJECT },
     { "go_offline", "deviceName", "Disconnect from the PLC.", a_go_offline, AF_PROJECT },
-    { "go_online", "deviceName; optional targetIp, pcInterfaceName, legacyCommunication",
+    { "go_online", "deviceName; optional targetIp, pcInterfaceName, legacyCommunication, trustPlcCertificate",
       "Connect to the PLC through the configured connection (run download_upload action=download_check first). targetIp "
       "(with pcInterfaceName) reaches a different address than the project IP. A protected PLC gets its password / PLC "
       "user from the Windows Credential Manager (admin action=set_credential kind=plc key=<PLC IP>).",
@@ -404,7 +427,9 @@ const tool_def tool_diagnostics = {
         "\"confirm\":{\"type\":\"string\"},\"skipConfirm\":{\"type\":\"boolean\"},"
         "\"includeIdentical\":{\"type\":\"boolean\"},"
         "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"go_online, compare_online_offline: use legacy "
-        "(non-secure) PG/PC communication, if the CPU allows it.\"}"
+        "(non-secure) PG/PC communication, if the CPU allows it.\"},"
+        "\"trustPlcCertificate\":{\"type\":\"boolean\",\"description\":\"go_online, compare_online_offline: trust the PLC "
+        "certificate when TIA Portal asks to verify it (secure PG/PC communication). Only after the user confirmed the PLC.\"}"
         "}",
     .actions = actions,
     .nactions = COUNT_OF(actions),

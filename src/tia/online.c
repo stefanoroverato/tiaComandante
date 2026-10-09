@@ -324,12 +324,34 @@ static int on_legitimation(void *ctx, const cJSON *args, cJSON **result)
     char *full = cfg ? td_typename(cfg) : NULL;
     const char *type = full ? (strrchr(full, '.') ? strrchr(full, '.') + 1 : full) : "?";
     const char *note = NULL;
+    char tls[768];
     int rc = on_answer_password(&l->secret, cfg, &note);
-    if (rc < 0) {
-        if (cfg && td_is(cfg, "Siemens.Engineering.Online.Configurations.TlsVerificationConfiguration"))
-            note = "NOT HANDLED - trust the PLC certificate in TIA Portal (or use legacyCommunication)";
-        else
-            note = "NOT HANDLED";
+    if (rc < 0 && cfg && td_is(cfg, "Siemens.Engineering.Online.Configurations.TlsVerificationConfiguration")) {
+        /* Secure PG/PC communication: the project does not know the PLC certificate yet. */
+        char *plc = td_get_s(cfg, "PlcName");
+        char *info = td_get_s(cfg, "VerificationInfo");
+        for (char *p = info; p && *p; p++)
+            if (*p == '\r' || *p == '\n')
+                *p = ' ';
+        if (!l->trust_certificate) {
+            snprintf(tls, sizeof tls, "NOT HANDLED - certificate of PLC %s not trusted yet: check it, then repeat with "
+                                      "trustPlcCertificate=true (or use legacyCommunication)%s%s%s",
+                     plc ? plc : "?", info && *info ? " [" : "", info ? info : "", info && *info ? "]" : "");
+        } else if (td_set(cfg, "CurrentSelection", cJSON_CreateString("Trusted")) == 0) {
+            snprintf(tls, sizeof tls, "certificate of PLC %s trusted (trustPlcCertificate=true)%s%s%s", plc ? plc : "?",
+                     info && *info ? " [" : "", info ? info : "", info && *info ? "]" : "");
+            rc = 0;
+        } else {
+            snprintf(tls, sizeof tls, "NOT HANDLED - trusting the certificate of PLC %s failed: %s", plc ? plc : "?",
+                     td_err());
+        }
+        free(plc);
+        free(info);
+        note = tls;
+        if (rc < 0)
+            rc = 1;
+    } else if (rc < 0) {
+        note = "NOT HANDLED";
     }
     if (rc != 0)
         l->secret.unanswered++;

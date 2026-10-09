@@ -37,6 +37,8 @@ const char *item_attrs(sw_container cont);
 void print_item(tool_ctx *c, sw_container cont, const cJSON *item, const char *folder);
 /* Compiles obj (ICompilable) and reports state and messages (errors only if requested). */
 int compile_object(tool_ctx *c, th obj, int errors_only);
+/* Lists up to limit error messages of a CompilerResult (one line each, with their path). */
+void compile_list_errors(tool_ctx *c, th result, int limit);
 /* blocks_write add_multi_instance_member with an explicit inner FB type (NULL = argument innerType). */
 int bw_add_multi_instance(tool_ctx *c, const char *inner_type);
 /* hardware action=dump_catalog (also used by admin reset_device_catalog). */

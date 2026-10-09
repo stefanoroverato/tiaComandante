@@ -57,7 +57,9 @@ namespace TiaComandante.Bridge
         static NativeCallbackFn s_native;
         static string s_opennessDir;
         static bool s_allLoaded;
-        static readonly JavaScriptSerializer s_json = CreateSerializer();
+        // One serializer per thread: TIA Portal events run on Openness threads, in parallel with requests.
+        [ThreadStatic] static JavaScriptSerializer t_json;
+        static JavaScriptSerializer Json { get { return t_json ?? (t_json = CreateSerializer()); } }
 
         // ---- handle table -------------------------------------------------
         sealed class Slot { public object Obj; public bool Pinned; }
@@ -148,7 +150,7 @@ namespace TiaComandante.Bridge
             int rc = 0;
             try
             {
-                var r = s_json.DeserializeObject(ReadUtf8(req)) as Dictionary<string, object>;
+                var r = Json.DeserializeObject(ReadUtf8(req)) as Dictionary<string, object>;
                 if (r == null) throw new BridgeException("request must be a JSON object");
                 var ok = new Dictionary<string, object>();
                 ok["ok"] = true;
@@ -164,14 +166,14 @@ namespace TiaComandante.Bridge
                 result = err;
             }
             string text;
-            try { text = s_json.Serialize(result); }
+            try { text = Json.Serialize(result); }
             catch (Exception ex)
             {
                 rc = 1;
                 var err = new Dictionary<string, object>();
                 err["ok"] = false;
                 err["err"] = DescribeException(ex);
-                text = s_json.Serialize(err);
+                text = Json.Serialize(err);
             }
             resp = WriteUtf8(text);
             return rc;
@@ -1041,7 +1043,7 @@ namespace TiaComandante.Bridge
                 ScopeBegin();
                 try
                 {
-                    string json = s_json.Serialize(args.Select(ToWire).ToList());
+                    string json = Json.Serialize(args.Select(ToWire).ToList());
                     IntPtr p = WriteUtf8(json);
                     IntPtr res = IntPtr.Zero;
                     try { cb(id, p, out res); }
@@ -1051,7 +1053,7 @@ namespace TiaComandante.Bridge
                         string rs = ReadUtf8(res);
                         Marshal.FreeCoTaskMem(res);
                         if (ret != typeof(void) && rs.Length > 0)
-                            result = Convert2(s_json.DeserializeObject(rs), ret);
+                            result = Convert2(Json.DeserializeObject(rs), ret);
                     }
                 }
                 catch

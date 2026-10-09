@@ -125,6 +125,15 @@ static int report_compile(tool_ctx *c, th result, int errors_only)
     return 0;
 }
 
+void compile_list_errors(tool_ctx *c, th result, int limit)
+{
+    msg_ctx m = { c, 1, 0, limit };
+    walk_messages(&m, td_get_h(result, "Messages"), "", 0);
+    if (m.printed > m.limit)
+        out(c, "... %d more error(s)\n", m.printed - m.limit);
+    td_clear_err();
+}
+
 int compile_object(tool_ctx *c, th obj, int errors_only)
 {
     th comp = td_service(obj, "Siemens.Engineering.Compiler.ICompilable");

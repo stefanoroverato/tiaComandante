@@ -64,6 +64,11 @@ int session_guard_end(tool_ctx *c, session_guard *g);
    one is opened after it. Returns the CompilerResult, or 0 (td_err set). */
 th session_compile(th compilable);
 
+/* Around each tool call. The confirmations policy answers only while a call runs: TIA Portal also
+   sends the confirmations of its own user interface to the subscribed client. */
+void session_call_begin(void);
+void session_call_end(void);
+
 /* After each tool call: appends collected TIA notifications and detects a lost connection. */
 void session_finish_call(tool_ctx *c);
 void session_shutdown(void);

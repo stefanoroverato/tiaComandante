@@ -61,6 +61,7 @@ typedef struct on_legit {
     on_secret secret;
     strbuf log;
     long long sub;
+    int trust_certificate; /* answer TLS certificate verification with Trusted (argument trustPlcCertificate) */
 } on_legit;
 void on_legitimation_begin(on_legit *l, th configuration, const char *ip);
 /* Prints the answered requests; returns how many were left unanswered. */

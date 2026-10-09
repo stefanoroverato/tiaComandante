@@ -2,9 +2,13 @@
  *
  * The main thread reads stdin and answers protocol requests directly
  * (initialize, ping, tools/list); tools/call is queued to a single worker
- * thread (STA) that owns the CLR bridge and the TIA Portal connection, so
- * Openness is only ever used from one thread and pings stay responsive
- * during long operations.
+ * thread (MTA) that owns the CLR bridge and the TIA Portal connection, so
+ * tool calls run one at a time and pings stay responsive during long
+ * operations. The worker must not be an STA thread: Openness delivers TIA
+ * Portal events to an STA client only while that thread is inside an
+ * Openness call, and TIA Portal waits for a Confirmation answer, so an idle
+ * STA worker froze TIA Portal at the first dialog of its user interface.
+ * In an MTA client the events run on Openness threads.
  */
 #include "server.h"
 
@@ -45,7 +49,7 @@ typedef struct job {
 } job;
 
 static CRITICAL_SECTION g_q_lock;
-static CONDITION_VARIABLE g_q_cv;
+static HANDLE g_q_event; /* auto-reset: a job was queued or stop was requested */
 static job *g_head, *g_tail, *g_running;
 static int g_stop;
 
@@ -142,14 +146,13 @@ static void free_job(job *j)
 static DWORD WINAPI worker_main(LPVOID arg)
 {
     (void)arg;
-    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (FAILED(hr))
         LOG_E("worker CoInitializeEx failed (0x%08lx)", (unsigned long)hr);
     for (;;) {
         EnterCriticalSection(&g_q_lock);
-        while (!g_head && !g_stop)
-            SleepConditionVariableCS(&g_q_cv, &g_q_lock, INFINITE);
         job *j = g_head;
+        int stop = g_stop;
         if (j) {
             g_head = j->next;
             if (!g_head)
@@ -157,8 +160,12 @@ static DWORD WINAPI worker_main(LPVOID arg)
             g_running = j;
         }
         LeaveCriticalSection(&g_q_lock);
-        if (!j)
-            break; /* stop requested and queue drained */
+        if (!j) {
+            if (stop)
+                break; /* stop requested and queue drained */
+            WaitForSingleObject(g_q_event, INFINITE);
+            continue;
+        }
 
         if (!j->cancelled) {
             tool_ctx c;
@@ -193,8 +200,8 @@ static void enqueue(job *j)
     else
         g_head = j;
     g_tail = j;
-    WakeConditionVariable(&g_q_cv);
     LeaveCriticalSection(&g_q_lock);
+    SetEvent(g_q_event);
 }
 
 static void cancel_request(const cJSON *request_id)
@@ -349,7 +356,11 @@ int mcp_serve(void)
     }
     InitializeCriticalSection(&g_out_lock);
     InitializeCriticalSection(&g_q_lock);
-    InitializeConditionVariable(&g_q_cv);
+    g_q_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!g_q_event) {
+        LOG_E("cannot create the job event");
+        return 1;
+    }
     LOG_I("tiacomandante %s MCP server started (%d tools, %d actions)%s", TC_VERSION, registry_count(),
           registry_action_total(), config_read_only() ? " [read-only]" : "");
 
@@ -389,8 +400,8 @@ int mcp_serve(void)
 
     EnterCriticalSection(&g_q_lock);
     g_stop = 1;
-    WakeAllConditionVariable(&g_q_cv);
     LeaveCriticalSection(&g_q_lock);
+    SetEvent(g_q_event);
     if (WaitForSingleObject(worker, 30000) == WAIT_TIMEOUT)
         LOG_W("worker still busy after 30 s, exiting anyway");
     CloseHandle(worker);

@@ -14,6 +14,7 @@
 #include "util/utf.h"
 
 #include <windows.h>
+#include <objbase.h>
 #include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,6 +130,16 @@ static int a_clear_exports(tool_ctx *c)
     return 0;
 }
 
+/* ShellExecute may load shell extensions that need an STA thread; the tool worker is MTA. */
+static DWORD WINAPI shell_open(LPVOID arg)
+{
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    HINSTANCE r = ShellExecuteW(NULL, L"open", (const wchar_t *)arg, NULL, NULL, SW_SHOWNORMAL);
+    if (SUCCEEDED(hr))
+        CoUninitialize();
+    return (DWORD)(INT_PTR)r;
+}
+
 static int a_open_file(tool_ctx *c)
 {
     const char *p = arg_req(c, "filePath");
@@ -138,10 +149,16 @@ static int a_open_file(tool_ctx *c)
     if (fs_full_path(p, full, sizeof full) != 0 || (!fs_is_file(full) && !fs_is_dir(full)))
         return fail(c, "'%s' does not exist", p);
     wchar_t *w = utf8_to_wide(full);
-    HINSTANCE r = ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL);
+    DWORD r = 0;
+    HANDLE t = w ? CreateThread(NULL, 0, shell_open, w, 0, NULL) : NULL;
+    if (t) {
+        WaitForSingleObject(t, INFINITE);
+        GetExitCodeThread(t, &r);
+        CloseHandle(t);
+    }
     free(w);
-    if ((INT_PTR)r <= 32)
-        return fail(c, "Windows could not open '%s' (code %d)", full, (int)(INT_PTR)r);
+    if (r <= 32)
+        return fail(c, "Windows could not open '%s' (code %lu)", full, (unsigned long)r);
     out(c, "Opened %s with the default application.\n", full);
     return 0;
 }

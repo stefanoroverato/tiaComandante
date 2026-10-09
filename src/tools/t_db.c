@@ -274,19 +274,18 @@ static int a_create_instance_db(tool_ctx *c)
         return -1;
     long long number = arg_i(c, "dbNumber", 0);
     th blocks = td_get_h(group, "Blocks");
-    th db = td_call_h(blocks, "CreateInstanceDB", tda("sbis", name, number <= 0, number > 0 ? number : 0LL, fb.name));
+    /* With automatic numbering the number is where TIA starts searching for a free one: 0 would
+       create DB0, which never compiles. */
+    th db = td_call_h(blocks, "CreateInstanceDB", tda("sbis", name, number <= 0, number > 0 ? number : 1LL, fb.name));
     if (!db)
         return fail_td(c, "creating the instance DB failed");
-    th comp = td_service(db, "Siemens.Engineering.Compiler.ICompilable");
-    if (comp)
-        session_compile(comp); /* the automatic number is assigned by the compiler */
-    td_clear_err();
     long long num = 0;
     td_get_i(db, "Number", &num);
-    if (num > 0)
-        out(c, "Instance DB '%s' (DB%lld) of %s created.\n", name, num, fb.name);
-    else
-        out(c, "Instance DB '%s' of %s created (number assigned at the next compilation).\n", name, fb.name);
+    td_clear_err();
+    if (num <= 0)
+        return fail(c, "instance DB '%s' was created without a valid number (DB%lld): delete it and retry with dbNumber",
+                    name, num);
+    out(c, "Instance DB '%s' (DB%lld) of %s created.\n", name, num, fb.name);
     return 0;
 }
 

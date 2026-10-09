@@ -196,6 +196,7 @@ int registry_execute(tool_ctx *c, const char *tool_name)
     QueryPerformanceCounter(&t0);
 
     int scoped = 0;
+    session_call_begin();
     if (session_prepare(c, flags) == 0) {
         if (session_bridge_ok()) {
             td_scope_begin();
@@ -222,6 +223,7 @@ int registry_execute(tool_ctx *c, const char *tool_name)
     session_finish_call(c);
     if (scoped && session_bridge_ok())
         td_scope_end();
+    session_call_end();
 
     QueryPerformanceCounter(&t1);
     double ms = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart;

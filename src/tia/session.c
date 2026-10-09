@@ -30,6 +30,7 @@ static struct {
     long long cb_confirm, cb_notify, cb_disposed;
     long long sub_confirm, sub_notify, sub_disposed;
     volatile LONG disposed;
+    volatile LONG in_call; /* tool calls running (session_call_begin/end) */
 
     SRWLOCK ev_lock;
     strbuf events;
@@ -103,6 +104,8 @@ static int has_choice(const char *choices, const char *name)
 /* Answer for the configured confirmations policy, or NULL to leave the dialog to TIA. */
 static const char *pick_answer(const char *choices)
 {
+    if (InterlockedCompareExchange(&S.in_call, 0, 0) == 0)
+        return NULL; /* raised by the user working in TIA Portal, not by a tool call */
     static const char *const negative[] = { "Cancel", "No", "NoToAll", "Abort", "Ok", NULL };
     static const char *const positive[] = { "Yes", "YesToAll", "Ok", NULL };
     const char *const *order = g_cfg.confirmations == CONF_CANCEL ? negative
@@ -118,6 +121,10 @@ static int on_confirmation(void *ctx, const cJSON *args, cJSON **result)
 {
     (void)ctx;
     (void)result;
+    if (S.in_call)
+        LOG_W("TIA confirmation event during a tool call (policy %s)", config_confirmation_names[g_cfg.confirmations % 3]);
+    else
+        LOG_I("TIA confirmation event outside a tool call");
     th e = tdv_h(cJSON_GetArrayItem(args, 1));
     char *caption = td_get_s(e, "Caption");
     char *text = td_get_s(e, "Text");
@@ -130,7 +137,8 @@ static int on_confirmation(void *ctx, const cJSON *args, cJSON **result)
     td_clear_err();
     char buf[2048];
     snprintf(buf, sizeof buf, "%s (choices: %s; %s%s)", text ? text : "", choices ? choices : "?",
-             answer ? "answered " : "left to TIA Portal", answer ? answer : "");
+             answer ? "answered " : S.in_call ? "left to TIA Portal" : "outside a tool call, left to the TIA Portal user",
+             answer ? answer : "");
     add_event("confirmation", caption, buf);
     free(caption);
     free(text);
@@ -619,6 +627,16 @@ int session_guard_end(tool_ctx *c, session_guard *g)
         td_clear_err();
     memset(g, 0, sizeof *g);
     return rerun;
+}
+
+void session_call_begin(void)
+{
+    InterlockedIncrement(&S.in_call);
+}
+
+void session_call_end(void)
+{
+    InterlockedDecrement(&S.in_call);
 }
 
 void session_finish_call(tool_ctx *c)

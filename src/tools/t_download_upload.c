@@ -23,11 +23,17 @@
 
 typedef struct gates {
     int has_plc, configured, compiled, compile_errors, online;
+    int hardware; /* the compile covered the whole device (hardware and software) */
+    th compile_result;
     char state[32];
     char ip[64];
 } gates;
 
-static void run_gates(tool_ctx *c, nav_plc *plc, gates *g, int compile)
+static const char *download_options(const char *mode, int *hardware);
+
+/* hardware: compile the device (hardware configuration and software), as a hardware download does;
+   otherwise only the PLC software. */
+static void run_gates(tool_ctx *c, nav_plc *plc, gates *g, int compile, int hardware)
 {
     memset(g, 0, sizeof *g);
     g->has_plc = plc->software != 0;
@@ -42,13 +48,15 @@ static void run_gates(tool_ctx *c, nav_plc *plc, gates *g, int compile)
     on_device_ip(plc, g->ip, sizeof g->ip, NULL);
     td_clear_err();
     if (compile && !g->online) {
-        th comp = td_service(plc->software, "Siemens.Engineering.Compiler.ICompilable");
+        g->hardware = hardware && plc->device;
+        th comp = td_service(g->hardware ? plc->device : plc->software, "Siemens.Engineering.Compiler.ICompilable");
         th res = comp ? session_compile(comp) : 0;
         if (res) {
             long long errs = 0;
             td_get_i(res, "ErrorCount", &errs);
             g->compiled = 1;
             g->compile_errors = (int)errs;
+            g->compile_result = res;
         }
         td_clear_err();
     }
@@ -60,8 +68,11 @@ static int a_download_check(tool_ctx *c)
     nav_plc plc;
     if (sw_plc(c, &plc) != 0)
         return -1;
+    int hardware = 0;
+    if (arg_s(c, "mode") && !download_options(arg_s(c, "mode"), &hardware))
+        return fail(c, "mode must be software_changes, software, hardware_software or hardware");
     gates g;
-    run_gates(c, &plc, &g, 1);
+    run_gates(c, &plc, &g, 1, hardware);
     out(c, "Device %s (PLC %s), configured IP %s, connection state %s\n", plc.device_name, plc.plc_name, *g.ip ? g.ip : "none",
         g.state);
     out(c, "[%s] PLC software present\n", g.has_plc ? "PASS" : "FAIL");
@@ -74,10 +85,13 @@ static int a_download_check(tool_ctx *c)
     else
         out(c, "[FAIL] online connection configured -> diagnostics action=configure_connection%s\n",
             *g.ip ? "" : ", or pass targetIp (the project has no IP for this PLC)");
-    if (g.compiled)
-        out(c, "[%s] compilation: %d error(s)%s\n", g.compile_errors ? "FAIL" : "PASS", g.compile_errors,
-            g.compile_errors ? " -> blocks_read action=get_compiler_errors" : "");
-    else
+    if (g.compiled) {
+        out(c, "[%s] compilation (%s): %d error(s)%s\n", g.compile_errors ? "FAIL" : "PASS",
+            g.hardware ? "hardware and software" : "software", g.compile_errors,
+            g.compile_errors ? (g.hardware ? ":" : " -> blocks_read action=get_compiler_errors") : "");
+        if (g.compile_errors && g.hardware)
+            compile_list_errors(c, g.compile_result, 10);
+    } else
         out(c, "[SKIP] compilation not verified%s\n", g.online ? " (the device is online)" : "");
     const char *verdict = !g.has_plc || !conn_ok || (g.compiled && g.compile_errors) ? "NOT READY"
                           : !g.compiled                                                   ? "COMPILE UNVERIFIED"
@@ -158,12 +172,20 @@ static int on_download_config(void *ctx, const cJSON *args, cJSON **result, cons
             choice = "Checked";
         td_clear_err();
     }
+    /* The "keep running" answers (NoAction, KeepActualValues) are not offered when the download cannot do
+       without them: say which option allows it. */
+    const char *refused = NULL;
+    if (!choice && strcmp(type, "StopModules") == 0 && !p->stop_modules)
+        refused = "NOT ALLOWED - this download needs the CPU in STOP: repeat with stopModules=true (download cancelled)";
+    else if (!choice && strncmp(type, "DataBlockReinitialization", 25) == 0 && !p->reinit_db)
+        refused = "NOT ALLOWED - this download reinitializes data blocks (actual values back to start values, CPU "
+                  "stopped): repeat with reinitializeDataBlocks=true (download cancelled)";
     const char *pw_note = NULL;
-    if (!choice && on_answer_password(&p->secret, cfg, &pw_note) == 0)
+    if (!choice && !refused && on_answer_password(&p->secret, cfg, &pw_note) == 0)
         choice = pw_note;
     if (!choice) {
         InterlockedIncrement((volatile LONG *)&p->unhandled);
-        policy_log(p, phase, type, pw_note ? pw_note : "NOT HANDLED - the download is cancelled by TIA Portal", msg);
+        policy_log(p, phase, type, refused ? refused : pw_note ? pw_note : "NOT HANDLED - the download is cancelled by TIA Portal", msg);
     } else {
         policy_log(p, phase, type, choice, msg);
     }
@@ -269,7 +291,12 @@ static int a_download_to_device(tool_ctx *c)
         return fail(c, "mode must be software_changes, software, hardware_software or hardware");
 
     gates g;
-    run_gates(c, &plc, &g, 1);
+    run_gates(c, &plc, &g, 1, hardware);
+    if (g.compiled && g.compile_errors && g.hardware) {
+        fail(c, "the device has %d compile error(s) (hardware and software): fix them first", g.compile_errors);
+        compile_list_errors(c, g.compile_result, 10);
+        return -1;
+    }
     if (g.compiled && g.compile_errors)
         return fail(c, "the software has %d compile error(s): fix them first (blocks_read action=get_compiler_errors)",
                     g.compile_errors);
@@ -313,12 +340,24 @@ static int a_download_to_device(tool_ctx *c)
     progress(c, 0, 0, "downloading");
     cJSON *res = NULL;
     int legacy_prev;
+    char err[1024] = "", etype[256] = "";
     if (on_apply_legacy(c, cfg, "the download", &legacy_prev) == 0) {
+        /* Secure communication: the download connects like go_online and may ask to verify the PLC certificate. */
+        on_legit legit;
+        on_legitimation_begin(&legit, cfg, ip);
+        legit.trust_certificate = arg_b(c, "trustPlcCertificate", 0);
         if (addr)
             res = td_call(dp, "Download", tda("hhcce", target, addr, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
         else
             res = td_call(dp, "Download", tda("hcce", target, cb_pre, cb_post, "Siemens.Engineering.Download.DownloadOptions", options));
+        if (!res) {
+            snprintf(err, sizeof err, "%s", td_err());
+            snprintf(etype, sizeof etype, "%s", td_err_type());
+        }
+        on_legitimation_end(c, &legit);
         on_restore_legacy(cfg, legacy_prev);
+        if (!res)
+            td_set_err(etype, "%s", err);
     }
     td_unregister_callback(cb_pre);
     td_unregister_callback(cb_post);
@@ -480,15 +519,15 @@ static int a_upload_station(tool_ctx *c)
 }
 
 static const action_def actions[] = {
-    { "download_check", "deviceName; optional targetIp",
+    { "download_check", "deviceName; optional targetIp, mode",
       "Silent pre-flight: call BEFORE any download or go_online. Checks PLC software, connection configuration and "
-      "compilation. Verdicts: READY, NOT READY (a gate failed - relay it), COMPILE UNVERIFIED (device online, compilation "
+      "compilation (with mode=hardware or hardware_software the whole device, hardware configuration included). Verdicts: READY, NOT READY (a gate failed - relay it), COMPILE UNVERIFIED (device online, compilation "
       "not checked - not a pass).",
       a_download_check, AF_PROJECT },
     { "download_to_device",
       "deviceName, confirm, pcInterfaceName; optional mode=software_changes|software|hardware_software|hardware, "
       "stopModules=false, startAfterDownload=true, reinitializeDataBlocks=false, targetIp, targetInterface, "
-      "legacyCommunication",
+      "legacyCommunication, trustPlcCertificate",
       "DESTRUCTIVE. Mandatory compile pre-check. confirm='I understand this will modify the PLC'. pcInterfaceName selects "
       "the network adapter (e.g. 'PLCSIM'). TIA Portal download dialogs are answered from stopModules/startAfterDownload/"
       "reinitializeDataBlocks; any other question cancels the download. PLC access passwords come from the Windows "
@@ -520,6 +559,8 @@ const tool_def tool_download_upload = {
         "\"addressIndex\":{\"type\":\"integer\"},"
         "\"legacyCommunication\":{\"type\":\"boolean\",\"description\":\"download_to_device, upload_station: use legacy "
         "(non-secure) PG/PC communication, if the CPU allows it.\"},"
+        "\"trustPlcCertificate\":{\"type\":\"boolean\",\"description\":\"download_to_device: trust the PLC certificate when "
+        "TIA Portal asks to verify it (secure PG/PC communication). Only after the user confirmed the PLC.\"},"
         "\"readPassword\":{\"type\":\"string\",\"description\":\"Not accepted: store PLC passwords with admin action=set_credential kind=plc.\"},"
         "\"writePassword\":{\"type\":\"string\",\"description\":\"Not accepted: store PLC passwords with admin action=set_credential kind=plc.\"}"
         "}",
