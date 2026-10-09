@@ -17,16 +17,19 @@ client MCP ──stdio──► tiacomandante.exe ──► tiacomandante-core.d
                                                │  AssemblyResolve → PublicAPI\V21\net48
                                                ▼
                                      Siemens.Engineering.* ──► TIA Portal V21
+
+                                     S7CommPlusDriver.dll + OpenSSL 3 ──► PLC (dati live, TLS, porta 102)
 ```
 
 - **`tiacomandante.exe`** è un launcher minimo e stabile, con build deterministica. L'AllowList di Openness identifica l'applicazione con l'hash SHA-256 dell'exe: tenendo l'exe invariato, l'accesso si approva una sola volta. Tutta la logica sta in `tiacomandante-core.dll`.
 - **Il bridge .NET** non contiene logica di dominio e non referenzia gli assembly Siemens. Offre al C solo: handle sugli oggetti, get/set/call con conversione dei tipi guidata dalla firma, `GetService<T>`, enumerazioni, eventi e delegate richiamati in C, eccezioni complete. Lo compila CMake con il `csc.exe` incluso in .NET Framework.
-- **Il thread worker** (STA) è l'unico a usare Openness: le `tools/call` vengono eseguite in serie, mentre `ping` e `tools/list` rispondono subito.
+- **Il thread worker** (MTA) è l'unico a usare Openness: le `tools/call` vengono eseguite in serie, mentre `ping` e `tools/list` rispondono subito.
+- **I dati live** (`live_data`) passano da [S7CommPlusDriver](https://github.com/thomas-v2/S7CommPlusDriver) (LGPL-3.0), caricato a runtime nel bridge come assembly separato, con OpenSSL 3 per la sessione TLS. Non serve TIA Portal: il server parla direttamente con il PLC (S7-1500 da firmware V2.9, S7-1200 da V4.3, PLCSIM), solo in lettura.
 - **Le modifiche** a DB, UDT, interfacce, reti e watch table seguono il ciclo export SimaticML → modifica (Mini-XML) → reimport.
 
 ## Build
 
-Requisiti: CMake ≥ 3.20, Visual Studio 2022 o Build Tools (MSVC x64), .NET Framework 4.8, git.
+Requisiti: CMake ≥ 3.20, Visual Studio 2022 o Build Tools (MSVC x64, con MSBuild), .NET Framework 4.8, git. Il driver dei dati live è in C# 7.3: CMake trova il `csc.exe` Roslyn di Visual Studio / Build Tools con `vswhere` (oppure `-DROSLYN_CSC=<percorso>`). Senza dati live: `-DTC_LIVE_DATA=OFF`. Le DLL di OpenSSL 3 vengono di default dal repository del driver; `-DTC_OPENSSL_DIR=<cartella>` usa un'altra build di OpenSSL 3 (consigliato per una distribuzione, vedi [`third_party/README.md`](third_party/README.md)).
 
 ```powershell
 git clone --recurse-submodules https://github.com/stefanoroverato/tiaComandante.git   # oppure, in un clone esistente:
@@ -36,12 +39,12 @@ cmake --build build --config Release
 ctest --test-dir build -C Release        # test di protocollo MCP (non serve TIA)
 ```
 
-In `build\Release\` vengono prodotti `tiacomandante.exe`, `tiacomandante-core.dll` e `TiaComandante.Bridge.dll`, che vanno copiati insieme nella stessa cartella. La CRT è statica, quindi non serve il redistributable VC++.
+In `build\Release\` vengono prodotti `tiacomandante.exe`, `tiacomandante-core.dll` e `TiaComandante.Bridge.dll`; per i dati live anche `S7CommPlusDriver.dll`, `zlib.net.dll`, `libcrypto-3-x64.dll` e `libssl-3-x64.dll`, più i testi delle licenze (`LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `S7CommPlusDriver.LICENSE.txt`, `GPL-3.0.txt`, `zlib.net.LICENSE.txt`). Vanno copiati insieme nella stessa cartella (i testi delle licenze accompagnano obbligatoriamente i binari se li distribuisci). La CRT è statica, quindi non serve il redistributable VC++.
 
 ## Installazione
 
 1. Installa TIA Portal V21 con l'opzione **Openness** e aggiungi il tuo utente Windows al gruppo locale **"Siemens TIA Openness"** (poi esegui logout e login).
-2. Copia i tre file in una cartella stabile, ad esempio `C:\TiaComandante\`.
+2. Copia i file prodotti dalla build in una cartella stabile, ad esempio `C:\TiaComandante\`.
 3. Al primo collegamento TIA Portal chiede di consentire l'accesso Openness a `tiacomandante.exe`: conferma. L'approvazione vale finché l'exe e il suo percorso non cambiano. Aggiornare `tiacomandante-core.dll` non richiede una nuova approvazione.
 4. Registra il server nel client MCP (vedi `docs/configs/`):
 
@@ -78,6 +81,7 @@ Workflow tipico:
 | `alarm_text` | liste di testi degli allarmi e voci, testi delle istanze di allarme, classi di allarme (via import/export Excel di TIA) |
 | `technology_objects` | oggetti tecnologici (assi, encoder, PID, contatori): elenco, creazione, parametri, connessioni hardware, compilazione, export/import, master copy |
 | `hardware` | device e moduli (slot, codice, firmware, indirizzi I/Q, canali), reti e sistemi IO, mappa I/O con i tag, compilazione, export CSV e CAx (AutomationML), impostazioni di rete, catalogo hardware |
+| `live_data` | valori live dal PLC in sola lettura (S7CommPlus su TLS): DB, tabelle dei tag e watch table del progetto, simboli; elenco di ciò che il PLC espone; identità della CPU letta online, livello di protezione, allarmi attivi e configurati |
 
 Sicurezza:
 - Le azioni che modificano il progetto **non si collegano mai in automatico** a un TIA in esecuzione: il target va scelto in modo esplicito con `session connect/open/create`.
@@ -100,7 +104,7 @@ tiacomandante --credentials delete plc 192.168.0.1
 Le stesse operazioni sono disponibili dal client MCP con `admin action=set_credential|list_credentials|delete_credential`: il dialogo di Windows si apre sul PC dove gira il server.
 
 - **Progetti UMAC:** `session open` prova prima l'apertura normale; se il progetto è protetto usa le credenziali salvate per quel percorso (o `*`).
-- **PLC protetti:** `go_online`, `compare_online_offline`, `download_to_device` e `upload_station` rispondono alle richieste di password con le credenziali salvate per l'IP del PLC (o `*`). Per una password di livello di accesso senza utente usa come nome utente `-`; con un nome utente vengono usate le credenziali come utente del PLC, di progetto oppure globale con `--global`.
+- **PLC protetti:** `go_online`, `compare_online_offline`, `download_to_device`, `upload_station` e `live_data connect` usano le credenziali salvate per l'IP del PLC (o `*`); `live_data set_credential` apre lo stesso dialogo di `admin set_credential kind=plc`. Per una password di livello di accesso senza utente usa come nome utente `-`; con un nome utente vengono usate le credenziali come utente del PLC, di progetto oppure globale con `--global`.
 - **Comunicazione legacy:** se il PLC la accetta, `legacyCommunication=true` usa la comunicazione PG/PC non sicura. Serve per esempio per caricare un PLC in un progetto che non ne conosce ancora il certificato.
 
 ### Configurazione
@@ -145,7 +149,7 @@ tiacomandante --read-only | --log-level debug|info|warn|error
 ## Limiti della versione attuale
 
 - Non ancora presente: l'editor di rung LAD/FBD (`networks[].rungs`, `insert_rung`, …).
-- `live_data` (S7CommPlus) è escluso; RUN/STOP della CPU non è leggibile via Openness.
+- `live_data` legge solo valori simbolici (gli indirizzi assoluti passano dal tag che li usa) e non legge RUN/STOP né il buffer di diagnostica: né Openness né il driver S7CommPlus li espongono. Il driver non verifica il certificato del PLC e il suo autore lo indica come "in sviluppo"; le prove sono state fatte con PLCSIM Advanced.
 - Online, confronto online/offline, download "solo modifiche" e `upload_station` (con `legacyCommunication=true`) sono verificati con PLCSIM Advanced. Anche le password dei PLC protetti (online, confronto, download) sono verificate con PLCSIM; manca ancora la prova su un PLC reale (vedi `STATUS.md`).
 - Se nel progetto l'IP della CPU è "impostato direttamente sul dispositivo", passa `targetIp` e `pcInterfaceName` a `go_online`, `compare_online_offline` e `download_to_device`.
 
@@ -155,6 +159,6 @@ Stato dettagliato, test da fare e lavoro mancante: [`STATUS.md`](STATUS.md).
 
 tiaComandante è distribuito con licenza [Apache 2.0](LICENSE). Copyright 2026 Stefano Roverato.
 
-Le librerie di terze parti mantengono le proprie licenze (cJSON: MIT; Mini-XML: Apache 2.0): testi e avvisi in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) e [`NOTICE`](NOTICE). Gli assembly Openness di Siemens non fanno parte del progetto: vengono caricati dall'installazione di TIA Portal.
+Le librerie di terze parti mantengono le proprie licenze (cJSON: MIT; Mini-XML: Apache 2.0; per i dati live, come librerie separate caricate a runtime, S7CommPlusDriver: LGPL-3.0, ZLIB.NET: BSD, OpenSSL: Apache 2.0): testi e avvisi in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) e [`NOTICE`](NOTICE). Gli assembly Openness di Siemens non fanno parte del progetto: vengono caricati dall'installazione di TIA Portal.
 
 TIA Portal, SIMATIC e STEP 7 sono marchi di Siemens AG. tiaComandante non è affiliato a Siemens né approvato da Siemens.

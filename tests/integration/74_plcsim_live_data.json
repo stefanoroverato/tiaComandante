@@ -1,0 +1,22 @@
+[
+ ["live_data", {"action":"get_status"}],
+ ["live_data", {"action":"connect","host":"${PLC_IP}","password":"not-accepted", "_expectError":true}],
+ ["live_data", {"action":"read_db","dbName":"AnyDb", "_expectError":true}],
+ ["live_data", {"action":"connect","host":"${PLC_IP}"}],
+ ["live_data", {"action":"connect","host":"${PLC_IP}"}],
+ ["live_data", {"action":"get_status"}],
+ ["live_data", {"action":"list_readable"}],
+ ["live_data", {"action":"list_readable","root":"M"}],
+ ["live_data", {"action":"list_readable","root":"NoSuchRoot", "_expectError":true}],
+ ["live_data", {"action":"read_db","dbName":"NoSuchDb", "_expectError":true}],
+ ["live_data", {"action":"read_watch_table","symbols":["\"NoSuchTag\"","%MW10"]}],
+ ["live_data", {"action":"read_watch_table","symbols":["\"x\""],"watchTableName":"y", "_expectError":true}],
+ ["live_data", {"action":"read_diagnostics","kind":"identity"}],
+ ["live_data", {"action":"read_diagnostics","kind":"protection"}],
+ ["live_data", {"action":"read_diagnostics","kind":"alarms","language":"en-US","maxEntries":5}],
+ ["live_data", {"action":"read_diagnostics","kind":"buffer", "_expectError":true}],
+ ["live_data", {"action":"list_credentials"}],
+ ["live_data", {"action":"connect","host":"192.0.2.1","timeoutMs":1000, "_expectError":true}],
+ ["live_data", {"action":"get_status"}],
+ ["live_data", {"action":"disconnect"}]
+]

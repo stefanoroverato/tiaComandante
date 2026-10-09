@@ -52,7 +52,12 @@ th td_call_h(th h, const char *method, cJSON *args);
 int td_call_v(th h, const char *method, cJSON *args); /* discards result, 0 = ok */
 cJSON *td_static(const char *type, const char *name, cJSON *args);
 th td_static_h(const char *type, const char *name, cJSON *args);
+/* Call with out/ref parameters (trailing out parameters may be omitted):
+   returns {"ret": value, "out": [by-ref parameter values in order]}. */
+cJSON *td_call_outs(th h, const char *method, cJSON *args);
 th td_new(const char *type, cJSON *args);
+/* Instance of a closed generic type, e.g. ("System.Collections.Generic.List`1", "Some.Type"). */
+th td_new_generic(const char *type, const char *generic_csv, cJSON *args);
 th td_service(th h, const char *type);                /* 0 if the service is not available */
 
 /* Enumerate an IEnumerable; with attrs_csv each item carries "a": {attr: value}. */
@@ -88,6 +93,8 @@ cJSON *tda(const char *fmt, ...);
 th tdv_h(const cJSON *v);                 /* handle or 0 */
 const char *tdv_s(const cJSON *v);        /* string, enum name, file/dir path, culture; else NULL */
 long long tdv_i(const cJSON *v, long long def);
+/* Exact integer (64-bit values beyond 2^53 travel as digit strings). 0 = ok. */
+int tdv_int64(const cJSON *v, long long *i, unsigned long long *u, int *is_unsigned);
 double tdv_d(const cJSON *v, double def);
 int tdv_b(const cJSON *v, int def);
 const char *tdv_type(const cJSON *v);     /* "$t" of a handle or "$enum" of an enum */

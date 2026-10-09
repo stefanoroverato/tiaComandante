@@ -1,6 +1,7 @@
 /* diagnostics: online connection, device IP, network scan, online/offline compare. */
 #include "tools.h"
 
+#include "tia/live.h"
 #include "tia/online.h"
 #include "tia/session.h"
 #include "tia/tia_dyn.h"
@@ -57,8 +58,16 @@ static int a_get_plc_status(tool_ctx *c)
     char ip[64];
     on_device_ip(&plc, ip, sizeof ip, NULL);
     out(c, "Configured IP: %s\n", *ip ? ip : "(none)");
-    out(c, "Operating state (RUN/STOP): not available - the Openness engineering API does not expose it and live data "
-           "is not part of this server.\n");
+    if (live_connected() && *ip && strcmp(ip, live_host()) == 0) {
+        const live_ident *id = live_identity();
+        out(c, "Live-data session: open, CPU read online %s firmware %s%s\n", id->order[0] ? id->order : "?",
+            id->firmware[0] ? id->firmware : "?", id->simulated ? " (simulation)" : "");
+    } else {
+        out(c, "Live-data session: none for this IP (live_data action=connect reads the CPU order number and firmware "
+               "online)\n");
+    }
+    out(c, "Operating state (RUN/STOP): not available - neither the Openness engineering API nor the S7CommPlus driver "
+           "used for live data can read it.\n");
     return 0;
 }
 
@@ -397,7 +406,8 @@ static const action_def actions[] = {
       a_get_device_ip, AF_PROJECT },
     { "get_plc_status", "deviceName",
       "Connection state (Offline/Online/NotReachable/Protected/...), whether the online connection is configured and the "
-      "configured IP. The CPU operating state (RUN/STOP) is not available through Openness.",
+      "configured IP, and the CPU identity read online when a live-data session to that IP is open. The CPU operating "
+      "state (RUN/STOP) is not available (neither Openness nor the live-data driver expose it).",
       a_get_plc_status, AF_PROJECT },
     { "go_offline", "deviceName", "Disconnect from the PLC.", a_go_offline, AF_PROJECT },
     { "go_online", "deviceName; optional targetIp, pcInterfaceName, legacyCommunication, trustPlcCertificate",

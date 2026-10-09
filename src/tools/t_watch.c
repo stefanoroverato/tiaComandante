@@ -205,8 +205,8 @@ static const char *entry_comment(mxml_node_t *e)
 static void apply_entry_args(tool_ctx *c, table_ref *r, mxml_node_t *e, const char *culture, int *next_id, int is_new)
 {
     mxml_node_t *al = sml_ensure_child(e, "AttributeList", 1);
-    const char *fmt = arg_s(c, "displayFormat");
-    set_attr_text(al, "DisplayFormat", fmt ? fmt : (is_new ? "Undef" : NULL));
+    /* Without displayFormat TIA Portal picks the operand's default ("Undef" is rejected on import). */
+    set_attr_text(al, "DisplayFormat", arg_s(c, "displayFormat"));
     if (r->force) {
         set_attr_text(al, "ForceValue", arg_s(c, "forceValue"));
     } else {

@@ -1,15 +1,15 @@
 # Stato del progetto
 
-Ultimo aggiornamento: 2026-10-05.
+Ultimo aggiornamento: 2026-10-09.
 Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_party/README.md` per le librerie.
 
 ## Fatto
 
 ### Infrastruttura
-- **Build:** CMake + MSVC x64, CRT statica. Il bridge .NET si compila con il `csc.exe` di .NET Framework 4.8.
+- **Build:** CMake + MSVC x64, CRT statica. Il bridge .NET si compila con il `csc.exe` di .NET Framework 4.8; il driver dei dati live (C# 7.3) con il `csc.exe` Roslyn di Visual Studio / Build Tools (opzione `TC_LIVE_DATA`).
 - **Composizione:** launcher `tiacomandante.exe` stabile (build deterministica, così l'approvazione nell'AllowList di Openness resta valida) + `tiacomandante-core.dll` + `TiaComandante.Bridge.dll`.
-- **Bridge .NET generico:** handle, get/set/call con conversione dei tipi guidata dalla firma, `GetService<T>`, eventi e delegate richiamati in C, eccezioni complete.
-- **Server MCP su stdio:** thread lettore + worker STA; negoziazione delle versioni 2024-11-05 … 2025-11-25; progress e cancel.
+- **Bridge .NET generico:** handle, get/set/call con conversione dei tipi guidata dalla firma, `GetService<T>`, eventi e delegate richiamati in C, eccezioni complete; parametri `out`/`ref` (`outs`), tipi generici chiusi (`new` con `generic`), interi a 64 bit esatti oltre 2^53 (`$i64`/`$u64`), output su `Console` dirottato nel log (lo stdout è il canale MCP).
+- **Server MCP su stdio:** thread lettore + worker MTA; negoziazione delle versioni 2024-11-05 … 2025-11-25; progress e cancel.
 - **Supporto:** configurazione, export store (exportId, 24 h), statistiche ed errori recenti, log in `%LOCALAPPDATA%\tiaComandante\logs`.
 - **Sicurezza:**
   - le azioni di scrittura non si collegano mai in automatico a un TIA in esecuzione;
@@ -18,9 +18,9 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
   - "blast radius" (oggetti che dipendono dal blocco) per le modifiche alle interfacce;
   - `ExclusiveAccess` + transazione intorno alle azioni che modificano il progetto (un passo di annullamento in TIA, rollback se la chiamata fallisce o viene annullata), disattivabili con `exclusiveAccess`/`transactions` in config.json;
   - credenziali (UMAC, PLC) solo nel Gestore credenziali di Windows, inserite col dialogo di Windows e mai dagli argomenti dei tool.
-- **Git:** submodule cJSON v1.7.19 e Mini-XML v4.0.6 sui fork `github.com/stefanoroverato/{cJSON,mxml}`. Repository pubblico `github.com/stefanoroverato/tiaComandante` (email autore noreply).
+- **Git:** submodule cJSON v1.7.19, Mini-XML v4.0.6 e S7CommPlusDriver (con modifiche locali, vedi `third_party/README.md`) sui fork `github.com/stefanoroverato/{cJSON,mxml,S7CommPlusDriver}`. Repository pubblico `github.com/stefanoroverato/tiaComandante` (email autore noreply).
 
-### Tool (17 tool, 213 azioni su 230 di TiaCommander)
+### Tool (18 tool, 224 azioni: mancano solo le 9 dell'editor LAD/FBD di TiaCommander)
 
 | Tool | Azioni | Stato dei test |
 |---|---|---|
@@ -40,6 +40,7 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 | library | 29/29 | ✅ scenario 91 (libreria globale di prova: copia di LStream V1.6 in `%TEMP%`, variabili `TC_LIB` e `TC_LIB_NAME`) |
 | alarm_text | 15/15 | ✅ scenario 92 (liste di testi, voci, testi degli allarmi con `Program_Alarm`, classi di allarme) |
 | technology_objects | 15/15 | ✅ scenario 93 (PID, assi, encoder: creazione, parametri, connessioni hardware, compilazione, export/import, master copy); `show_in_editor` richiede TIA con interfaccia |
+| live_data | 11/11 | ✅ con PLCSIM Advanced (CPU 1511-1 PN V2.9, comunicazione sicura): tutti i tipi di dato dei DB di prova del driver, tabella dei tag, watch table, simboli, identità, livello di protezione, allarmi attivi e configurati, errori (scenario 74 e prove manuali) |
 | download_upload | 4/4 | ✅ check, download "solo modifiche" (trasferimento reale di un OB, risposta automatica a ConsistentBlocksDownload), upload_station in un progetto nuovo con `legacyCommunication=true` |
 
 ### Test eseguiti
@@ -58,6 +59,8 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 - ✅ Download con un blocco effettivamente modificato, senza STOP: OB caricato, richiesta `ConsistentBlocksDownload` gestita in automatico (2026-10-02).
 - ✅ **Download che richiedono STOP** (2026-10-09, seconda istanza PLCSIM: CPU 1511-1 PN V2.9 nuova, comunicazione sicura): `hardware_software` e `hardware` con la CPU in RUN e `stopModules=true` (`StopModules` → `StopAll`, poi `StartModules`); con `stopModules=false` il download è annullato con "NOT ALLOWED - this download needs the CPU in STOP: repeat with stopModules=true". Cambio di struttura di un DB: con `reinitializeDataBlocks=false` annullato ("NOT ALLOWED - this download reinitializes data blocks…"), con `true` → `StopPlcAndReinitialize`. Confronto finale Identical. `OverwriteSystemData` → `Overwrite` verificato con un modulo aggiunto alla configurazione ("Delete and replace system data in target").
 - ✅ **Comunicazione PG/PC sicura:** `trustPlcCertificate=true` (go_online, compare_online_offline, download_to_device) risponde `Trusted` alla verifica del certificato del PLC (`TlsVerificationConfiguration`) e riporta il messaggio di TIA; senza l'opzione la richiesta resta senza risposta e il messaggio indica l'opzione.
+- ✅ **Dati live** (2026-10-09, PLCSIM Advanced, CPU 1511-1 PN V2.9 con comunicazione sicura, progetto di prova con i DB di prova del driver, una tabella dei tag, una watch table, un OB ciclico in SCL che cambia i valori e un FB con `Program_Alarm` sempre attivo): connessione TLS in circa 0,2 s, browse di 235 valori in circa 0,1 s, lettura esatta di tutti i tipi (interi a 64 bit ai limiti, Real/LReal alla precisione piena, Byte..LWord in esadecimale, Char/String/WChar/WString con caratteri non ASCII, Date, TOD, DT, LTOD, LDT, DTL, Time, LTime, S5Time), tag di M, I e Q, voci di watch table (il DTL letto intero), valori che cambiano tra due letture, identità del PLC, livello di protezione, allarme attivo e 53 allarmi configurati, host irraggiungibile (timeout in 2 s), password come argomento rifiutata, nessuna riga non JSON sullo stdout. Scenario `74_plcsim_live_data.json` (variabile `PLC_IP`) riuscito; regressione degli scenari 00–60, 80, 90–93 (281 chiamate) riuscita dopo le modifiche al bridge (parametri `out`, interi a 64 bit, scelta dell'overload, `Console`).
+- [ ] Dati live con un PLC protetto da password o con utenti del PLC (legittimazione con la credenziale salvata) e con un PLC reale.
 - [ ] Download e online su un PLC reale tramite una scheda di rete fisica.
 - [ ] `go_online` senza `targetIp` su un progetto che ha l'IP nel progetto.
 - [ ] `session save_as`, `launch` (`archive` provato nello scenario 90); `blocks_read export_all_xml`, `get_all_interfaces_summary` su progetti grandi (tempi).
@@ -68,14 +71,16 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 - [ ] Progetti multilingua: scelta della lingua per commenti e titoli.
 
 ## Da fare
-1. **Azioni mancanti** rispetto a TiaCommander: solo quelle dell'editor LAD/FBD e di `live_data`:
+1. **Azioni mancanti** rispetto a TiaCommander: solo quelle dell'editor LAD/FBD:
    - `blocks_read`: `get_edit_capabilities`, `get_element_pins`;
    - `blocks_write`, editor di rung LAD/FBD: `insert_rung`, `update_rung`, `delete_rung`, `populate_network`, `update_network_element`, `split_network`, `delete_scl_statement`, `create_block networks[].rungs`;
-   - `live_data` (11) resta escluso per scelta (S7CommPlus); `open_manager` non si applica (nessuna GUI).
-2. ~~Export XLSX~~: fatto senza nuove dipendenze (zip di .NET Framework tramite il bridge, XML con Mini-XML): tag, watch/force, hardware, dati degli allarmi.
-3. **Comando `--allowlist`** per registrare l'exe nell'AllowList di Openness (richiede privilegi di amministratore).
-4. **Integrazione in CTest:** portare gli scenari di integrazione in CTest come test opzionali (oggi sono manuali).
-5. **Certificati TLS dei PLC:** opzione esplicita per accettare il certificato di un PLC (`TlsVerificationConfiguration`), oggi lasciata a TIA.
+   - `open_manager` non si applica (nessuna GUI).
+2. **Dati live, limiti aperti:** RUN/STOP della CPU e buffer di diagnostica non sono leggibili (né Openness né il driver S7CommPlus li espongono); indirizzi assoluti senza tag non leggibili (solo accesso simbolico). Il driver non verifica il certificato del PLC.
+3. ~~Export XLSX~~: fatto senza nuove dipendenze (zip di .NET Framework tramite il bridge, XML con Mini-XML): tag, watch/force, hardware, dati degli allarmi.
+4. **Comando `--allowlist`** per registrare l'exe nell'AllowList di Openness (richiede privilegi di amministratore).
+5. **Integrazione in CTest:** portare gli scenari di integrazione in CTest come test opzionali (oggi sono manuali).
+6. ~~Certificati TLS dei PLC~~: fatto con `trustPlcCertificate` (go_online, compare_online_offline, download_to_device).
+7. **OpenSSL per la distribuzione:** le DLL di OpenSSL 3.0.8 del repository del driver non sono firmate e sono vecchie: per i rilasci usare una build ufficiale aggiornata (`TC_OPENSSL_DIR`).
 
 ## Note tecniche su Openness V21
 - **Import SimaticML:** serve l'elemento `<Namespace/>` (software unit) nell'AttributeList di blocchi e UDT.
@@ -135,3 +140,17 @@ Riferimenti: piano iniziale (milestone M0–M4), README per build e uso, `third_
 - **AllowList:** identifica l'applicazione con percorso + SHA-256 dell'exe; nel registro sotto `HKLM\SOFTWARE\Siemens\Automation\Openness\AllowList`.
 - **Transazioni:** `ExclusiveAccess.Transaction(project, text)`; `CommitOnDispose()` conferma, altrimenti `Dispose()` annulla tutto. `Compile` dentro una transazione fallisce ("The operation is not permitted within a transaction"): `session_compile()` conferma la transazione, compila e ne apre una nuova. TIA rifiuta anche il commit dopo un'eccezione avvenuta dentro la transazione ("Commit of a Transaction is not allowed after an exception is thrown"), anche se l'azione si è ripresa (es. watch: import → errore → compilazione → re-import). In quel caso la chiamata viene annullata e rieseguita senza transazione, purché non sia già stato confermato nulla. Save, download e upload sono esclusi (`AF_NO_TX`).
 - **UMAC:** `Projects.Open(FileInfo, UmacDelegate)`; il delegate riceve `UmacCredentials` (Name, Type Project/Global, `SetPassword(SecureString)`). Il bridge converte le stringhe in `SecureString` e il testo della richiesta viene azzerato dopo l'uso.
+- **Watch table:** una voce nuova con `DisplayFormat` `Undef` viene rifiutata dall'import ("has invalid value: 'Undef'"); senza `displayFormat` il server ora non scrive l'attributo e TIA sceglie il formato del tipo (DEC_signed, Float, Hex, DATE_AND_TIME...).
+
+## Note tecniche sui dati live (S7CommPlus)
+- **Driver:** S7CommPlusDriver di thomas-v2 (C#, .NET Framework 4.7.2, LGPL-3.0), caricato con l'op `load` del bridge e usato solo tramite reflection: `S7CommPlusConnection.Connect/Disconnect/Browse/getPlcTagBySymbol/GetActiveAlarms/ExploreASAlarms`, `PlcTags.TagFactory/ReadTags`. La connessione usa il TSAP `SIMATIC-ROOT-HMI` (come un pannello HMI) ed è solo TLS 1.3: CPU che non permettono la comunicazione PG/HMI sicura non sono raggiungibili, e la comunicazione legacy non è supportata.
+- **Console:** il driver scrive su `Console` (anche dal thread di ricezione): nel processo del server lo stdout è il canale MCP, quindi il bridge sostituisce `Console.Out`/`Console.Error` all'avvio e il testo finisce nel log a livello DEBUG (`[.NET] ...`).
+- **Log delle chiavi TLS:** il driver originale scrive a ogni connessione i segreti TLS in `key_<data>.log` nella cartella corrente; nel fork è disattivato (vedi `third_party/README.md`).
+- **Identità:** la stringa di sessione contiene codice d'ordine e firmware della CPU (`1;6ES7 511-1AK02-0AB0 ;V2.9`); PLCSIM Advanced riporta la propria identità (`6ES7 SIM-01500-APLC`, firmware `S4.1`), non quella della CPU configurata, quindi `read_tag_table`/`read_watch_table` non confrontano il codice d'ordine con un PLC simulato.
+- **Livello di protezione:** 1 = accesso completo, 2 = lettura, 3 = HMI, 4 = nessun accesso. Il driver si legittima con la password solo se il livello è sopra "accesso completo"; con il livello HMI la lettura dei valori accessibili da HMI funziona anche senza password.
+- **Browse:** esplora tutti i DB e le aree I/Q/M in un'unica richiesta del contenitore dei tipi (235 valori in circa 0,1 s); risultato in cache per sessione (`refresh=true`). Gli array e le strutture sono appiattiti fino ai valori elementari: un DTL appare come 8 membri (YEAR..NANOSECOND), letto come simbolo è invece un valore unico. I DB solo in memoria di caricamento e i valori non accessibili da HMI non compaiono.
+- **Valori:** `ReadTags` legge tutti i tag in una richiesta (il driver la divide secondo i limiti della CPU). Formattazione in notazione TIA nel C; gli interi a 64 bit passano dal bridge come stringhe di cifre (`$i64`/`$u64`) perché cJSON li leggerebbe come double.
+- **Indirizzi assoluti:** il driver offre solo l'accesso simbolico: `%MW20` si legge tramite il tag che lo usa; slice (`.%X1`) e accesso periferico (`:P`) non sono leggibili.
+- **Allarmi:** `GetActiveAlarms` restituisce gli allarmi attivi con testi nella lingua chiesta (LCID); `ExploreASAlarms` gli allarmi configurati (con PLCSIM 52 modelli di diagnostica di sistema + gli allarmi di programma). Per una lingua di cui il PLC non ha testi la richiesta degli allarmi configurati fallisce con un errore di protocollo: il server riprova in en-US. I testi contengono i campi dei valori associati (`@1W%t#7W@`), riportati così come sono.
+- **Tempi:** connessione circa 0,2 s; `Disconnect` circa 2 s (il thread di ricezione del driver esce al timeout di lettura); host irraggiungibile: errore dopo `timeoutMs` (nel driver originale circa 21 s, corretto nel fork).
+- **Non disponibili:** stato RUN/STOP (il driver sa solo impostarlo, e il server non lo fa), buffer di diagnostica, verifica del certificato del PLC.

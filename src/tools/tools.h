@@ -22,6 +22,7 @@ extern const tool_def tool_hardware;
 extern const tool_def tool_library;
 extern const tool_def tool_alarm_text;
 extern const tool_def tool_technology_objects;
+extern const tool_def tool_live_data;
 extern const tool_def tool_dev;
 
 #define COUNT_OF(a) ((int)(sizeof(a) / sizeof((a)[0])))

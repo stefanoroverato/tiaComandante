@@ -2,6 +2,7 @@
 
 #include "app/config.h"
 #include "app/credentials.h"
+#include "tia/live.h"
 #include "tia/tia_env.h"
 #include "tia/tia_nav.h"
 #include "util/fs.h"
@@ -665,6 +666,8 @@ void session_finish_call(tool_ctx *c)
 
 void session_shutdown(void)
 {
+    if (S.bridge_ok)
+        live_disconnect();
     if (S.bridge_ok && S.portal)
         session_release();
 }

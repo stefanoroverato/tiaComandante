@@ -102,6 +102,11 @@ namespace TiaComandante.Bridge
 
                 AppDomain.CurrentDomain.AssemblyResolve += OnAssemblyResolve;
 
+                // stdout carries the MCP protocol: nothing loaded in-process may write to the console.
+                // Native code can route the text to its log with the "console" op.
+                Console.SetOut(TextWriter.Null);
+                Console.SetError(TextWriter.Null);
+
                 s_invoke = new InvokeFn(Invoke);
                 s_free = new FreeFn(Free);
                 if (cb != 0)
@@ -121,8 +126,11 @@ namespace TiaComandante.Bridge
 
         static Assembly OnAssemblyResolve(object sender, ResolveEventArgs args)
         {
-            if (string.IsNullOrEmpty(s_opennessDir)) return null;
             string name = new AssemblyName(args.Name).Name;
+            // Assemblies loaded with the "load" op live in the LoadFrom context: resolve them by name.
+            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+                if (string.Equals(a.GetName().Name, name, StringComparison.OrdinalIgnoreCase)) return a;
+            if (string.IsNullOrEmpty(s_opennessDir)) return null;
             if (!name.StartsWith("Siemens.Engineering", StringComparison.OrdinalIgnoreCase)) return null;
             string path = Path.Combine(s_opennessDir, name + ".dll");
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
@@ -233,9 +241,9 @@ namespace TiaComandante.Bridge
                 case "ping": return "pong";
                 case "get": return ToWire(GetMember(Target(r), Str(r, "name")));
                 case "set": SetMember(Target(r), Str(r, "name"), Val(r, "value")); return null;
-                case "call": return ToWire(CallMethod(Target(r), null, Str(r, "name"), Args(r), Generic(r), Sig(r)));
-                case "static": return ToWire(CallStatic(ResolveTypeOrThrow(Str(r, "type")), Str(r, "name"), Args(r), Generic(r), Sig(r)));
-                case "new": return ToWire(Construct(ResolveTypeOrThrow(Str(r, "type")), Args(r), Sig(r)));
+                case "call": return Call(Target(r), null, r);
+                case "static": return Call(null, ResolveTypeOrThrow(Str(r, "type")), r);
+                case "new": return ToWire(Construct(ConstructedType(r), Args(r), Sig(r)));
                 case "service": return ToWire(GetService(Target(r), ResolveTypeOrThrow(Str(r, "type"))));
                 case "enumerate": return Enumerate(Target(r), StrList(r, "attrs"), IntOr(r, "limit", -1));
                 case "attrs": return ReadAttrs(Target(r), StrList(r, "attrs"));
@@ -254,8 +262,66 @@ namespace TiaComandante.Bridge
                 case "scope_begin": ScopeBegin(); return null;
                 case "scope_end": ScopeEnd(); return null;
                 case "load": return ToWire(Assembly.LoadFrom(Str(r, "path")));
+                case "console": SetConsole(r.ContainsKey("cb") && r["cb"] != null ? LongOf(r["cb"]) : 0); return null;
                 default: throw new BridgeException("unknown op '" + op + "'");
             }
+        }
+
+        // call/static: with "outs": true, trailing out parameters may be omitted and the
+        // result is {"ret": value, "out": [by-ref parameter values in order]}.
+        static object Call(object target, Type staticType, Dictionary<string, object> r)
+        {
+            object o;
+            bool outs = r.TryGetValue("outs", out o) && o is bool && (bool)o;
+            MethodBase m;
+            object[] conv;
+            object ret = CallMethod(target, staticType, Str(r, "name"), Args(r), Generic(r), Sig(r), outs, out m, out conv);
+            if (!outs) return ToWire(ret);
+            var d = new Dictionary<string, object>();
+            d["ret"] = ToWire(ret);
+            var list = new List<object>();
+            if (m != null)
+            {
+                ParameterInfo[] ps = m.GetParameters();
+                for (int i = 0; i < ps.Length; i++)
+                    if (ps[i].ParameterType.IsByRef) list.Add(ToWire(conv[i]));
+            }
+            d["out"] = list;
+            return d;
+        }
+
+        // new: "generic" closes a generic type definition, e.g. Dictionary`2 with [UInt64, X].
+        static Type ConstructedType(Dictionary<string, object> r)
+        {
+            Type t = ResolveTypeOrThrow(Str(r, "type"));
+            Type[] g = Generic(r);
+            return g == null ? t : t.MakeGenericType(g);
+        }
+
+        // Console text written by loaded assemblies goes to native callback cb (args: [line]), or nowhere (cb = 0).
+        sealed class CallbackWriter : TextWriter
+        {
+            readonly long m_cb;
+            readonly StringBuilder m_line = new StringBuilder();
+            public CallbackWriter(long cb) { m_cb = cb; }
+            public override Encoding Encoding { get { return Encoding.UTF8; } }
+            public override void Write(char value)
+            {
+                if (value == '\n')
+                {
+                    string s = m_line.ToString().TrimEnd('\r');
+                    m_line.Length = 0;
+                    DispatchCallback(m_cb, new object[] { s }, typeof(void));
+                }
+                else if (m_line.Length < 8192) m_line.Append(value);
+            }
+        }
+
+        static void SetConsole(long cb)
+        {
+            TextWriter w = cb == 0 ? TextWriter.Null : TextWriter.Synchronized(new CallbackWriter(cb));
+            Console.SetOut(w);
+            Console.SetError(w);
         }
 
         static string Str(Dictionary<string, object> r, string k)
@@ -408,9 +474,19 @@ namespace TiaComandante.Bridge
                 d["value"] = Convert.ToInt64(v, CultureInfo.InvariantCulture);
                 return d;
             }
-            if (v is sbyte || v is byte || v is short || v is ushort || v is int || v is uint || v is long)
+            if (v is sbyte || v is byte || v is short || v is ushort || v is int || v is uint)
                 return Convert.ToInt64(v, CultureInfo.InvariantCulture);
-            if (v is ulong) return (ulong)v <= long.MaxValue ? (object)Convert.ToInt64(v) : v.ToString();
+            // Integers beyond 2^53 travel as digit strings: JSON numbers are doubles on the native side.
+            if (v is long)
+            {
+                long l = (long)v;
+                return l > MaxExact || l < -MaxExact ? Marker("$i64", l.ToString(CultureInfo.InvariantCulture)) : (object)l;
+            }
+            if (v is ulong)
+            {
+                ulong u = (ulong)v;
+                return u > (ulong)MaxExact ? Marker("$u64", u.ToString(CultureInfo.InvariantCulture)) : (object)(long)u;
+            }
             if (v is float || v is double) return Convert.ToDouble(v, CultureInfo.InvariantCulture);
             if (v is decimal) return Convert.ToDouble(v, CultureInfo.InvariantCulture);
             if (v is DateTime) return ((DateTime)v).ToString("o", CultureInfo.InvariantCulture);
@@ -428,6 +504,15 @@ namespace TiaComandante.Bridge
             h["$h"] = Register(v);
             h["$t"] = t.FullName;
             return h;
+        }
+
+        const long MaxExact = 9007199254740992; // 2^53
+
+        static Dictionary<string, object> Marker(string key, object value)
+        {
+            var d = new Dictionary<string, object>();
+            d[key] = value;
+            return d;
         }
 
         // Resolve a wire value without a target type (object parameters).
@@ -449,6 +534,7 @@ namespace TiaComandante.Bridge
                 if (d.ContainsKey("$i32")) return Convert.ToInt32(d["$i32"], CultureInfo.InvariantCulture);
                 if (d.ContainsKey("$u32")) return Convert.ToUInt32(d["$u32"], CultureInfo.InvariantCulture);
                 if (d.ContainsKey("$i64")) return Convert.ToInt64(d["$i64"], CultureInfo.InvariantCulture);
+                if (d.ContainsKey("$u64")) return Convert.ToUInt64(d["$u64"], CultureInfo.InvariantCulture);
                 if (d.ContainsKey("$f64")) return Convert.ToDouble(d["$f64"], CultureInfo.InvariantCulture);
                 if (d.ContainsKey("$str")) return Convert.ToString(d["$str"], CultureInfo.InvariantCulture);
                 if (d.ContainsKey("$cb")) throw new BridgeException("$cb needs a delegate-typed parameter");
@@ -498,7 +584,7 @@ namespace TiaComandante.Bridge
                 if (d.ContainsKey("$cb")) return typeof(Delegate).IsAssignableFrom(t) ? 3 : -1;
                 if (d.ContainsKey("$h") || d.ContainsKey("$enum") || d.ContainsKey("$type") || d.ContainsKey("$file") ||
                     d.ContainsKey("$dir") || d.ContainsKey("$culture") || d.ContainsKey("$i32") || d.ContainsKey("$u32") ||
-                    d.ContainsKey("$i64") || d.ContainsKey("$f64") || d.ContainsKey("$str"))
+                    d.ContainsKey("$i64") || d.ContainsKey("$u64") || d.ContainsKey("$f64") || d.ContainsKey("$str"))
                 {
                     object o = Resolve(w);
                     if (o == null) return t.IsValueType ? -1 : 2;
@@ -779,10 +865,12 @@ namespace TiaComandante.Bridge
             return true;
         }
 
-        static MethodBase Pick(IEnumerable<MethodBase> candidates, object[] args, Type[] generic, List<string> sig, out object[] converted)
+        // outs: trailing out parameters may be omitted (and null is accepted for any out parameter).
+        static MethodBase Pick(IEnumerable<MethodBase> candidates, object[] args, Type[] generic, List<string> sig, bool outs,
+                               out object[] converted)
         {
             MethodBase best = null;
-            int bestScore = -1;
+            int bestScore = int.MinValue;
             foreach (MethodBase c in candidates)
             {
                 MethodBase m = c;
@@ -797,14 +885,15 @@ namespace TiaComandante.Bridge
                 ParameterInfo[] ps;
                 try { ps = m.GetParameters(); } catch { continue; } // signature uses an unresolvable internal type
                 if (!SigMatches(ps, sig)) continue;
-                int required = ps.Count(p => !p.IsOptional);
+                int required = ps.Count(p => !p.IsOptional && !(outs && p.IsOut));
                 if (args.Length < required || args.Length > ps.Length) continue;
                 int score = 0;
                 bool ok = true;
                 for (int i = 0; i < args.Length; i++)
                 {
                     int s;
-                    try { s = Score(args[i], ps[i].ParameterType); } catch { s = -1; }
+                    if (outs && ps[i].IsOut && args[i] == null) s = 2;
+                    else try { s = Score(args[i], ps[i].ParameterType); } catch { s = -1; }
                     if (s < 0) { ok = false; break; }
                     score += s;
                 }
@@ -817,7 +906,7 @@ namespace TiaComandante.Bridge
             ParameterInfo[] bp = best.GetParameters();
             converted = new object[bp.Length];
             for (int i = 0; i < bp.Length; i++)
-                converted[i] = i < args.Length ? Convert2(args[i], bp[i].ParameterType) : bp[i].DefaultValue;
+                converted[i] = i < args.Length ? Convert2(args[i], bp[i].ParameterType) : bp[i].IsOut ? null : bp[i].DefaultValue;
             return best;
         }
 
@@ -834,8 +923,11 @@ namespace TiaComandante.Bridge
             return sb.ToString();
         }
 
-        static object CallMethod(object target, Type staticType, string name, object[] args, Type[] generic, List<string> sig)
+        static object CallMethod(object target, Type staticType, string name, object[] args, Type[] generic, List<string> sig,
+                                 bool outs, out MethodBase picked, out object[] conv)
         {
+            picked = null;
+            conv = null;
             List<MethodBase> cands = new List<MethodBase>();
             if (target != null)
             {
@@ -861,17 +953,12 @@ namespace TiaComandante.Bridge
             }
             if (cands.Count == 0)
                 throw new BridgeException("method '" + name + "' not found on " + (target != null ? target.GetType().FullName : staticType.FullName));
-            object[] conv;
-            MethodBase pick = Pick(cands, args, generic, sig, out conv);
+            MethodBase pick = Pick(cands, args, generic, sig, outs, out conv);
             if (pick == null)
                 throw new BridgeException("no overload of '" + name + "' matches the " + args.Length + " given argument(s); candidates:" + DescribeCandidates(cands));
+            picked = pick;
             try { return pick.Invoke(target, conv); }
             catch (TargetInvocationException ex) { throw Unwrap(ex); }
-        }
-
-        static object CallStatic(Type t, string name, object[] args, Type[] generic, List<string> sig)
-        {
-            return CallMethod(null, t, name, args, generic, sig);
         }
 
         static object Construct(Type t, object[] args, List<string> sig)
@@ -879,7 +966,7 @@ namespace TiaComandante.Bridge
             var cands = t.GetConstructors().Cast<MethodBase>().ToList();
             if (cands.Count == 0 && args.Length == 0 && t.IsValueType) return Activator.CreateInstance(t);
             object[] conv;
-            MethodBase pick = Pick(cands, args, null, sig, out conv);
+            MethodBase pick = Pick(cands, args, null, sig, false, out conv);
             if (pick == null) throw new BridgeException("no constructor of " + t.FullName + " matches; candidates:" + DescribeCandidates(cands));
             try { return ((ConstructorInfo)pick).Invoke(conv); }
             catch (TargetInvocationException ex) { throw Unwrap(ex); }

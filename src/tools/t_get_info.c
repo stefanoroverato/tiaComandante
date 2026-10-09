@@ -3,6 +3,7 @@
 #include "app/config.h"
 #include "mcp/registry.h"
 #include "tc_version.h"
+#include "tia/live.h"
 #include "tia/session.h"
 #include "tia/tia_env.h"
 #include "util/utf.h"
@@ -32,6 +33,13 @@ static int get_info(tool_ctx *c)
             session_launched() ? "started by tiaComandante" : "attached");
     else
         out(c, "Connection: not connected\n");
+    const char *missing = live_missing_file();
+    if (missing)
+        out(c, "Live data: not installed (%s missing)\n", missing);
+    else if (live_connected())
+        out(c, "Live data: session to %s\n", live_host());
+    else
+        out(c, "Live data: available, no session (live_data action=connect)\n");
     out(c, "Read-only mode: %s\n", config_read_only() ? "ON (write actions are refused)" : "off");
     out(c, "Config: %s\nData: %s\n", g_cfg.config_file, g_cfg.data_dir);
     out(c, "Workflow: session get_state -> session connect | open | create -> session list_devices -> "

@@ -147,6 +147,20 @@ static void set_err_from_json(const cJSON *e)
 
 /* ---- core -------------------------------------------------------------- */
 
+static cJSON *req_new(const char *op);
+static const char *big_digits(const cJSON *v, int *is_unsigned);
+
+/* Console text of .NET code running in-process (the bridge keeps it off stdout). */
+static int on_console_line(void *ctx, const cJSON *args, cJSON **result)
+{
+    (void)ctx;
+    (void)result;
+    const char *line = cJSON_GetStringValue(cJSON_GetArrayItem(args, 0));
+    if (line && *line)
+        LOG_D("[.NET] %s", line);
+    return 0;
+}
+
 int td_init(const wchar_t *bridge_dll, const wchar_t *openness_dir, char *err, size_t errlen)
 {
     if (g_ready)
@@ -154,6 +168,10 @@ int td_init(const wchar_t *bridge_dll, const wchar_t *openness_dir, char *err, s
     if (clr_start_bridge(bridge_dll, openness_dir, native_callback, &g_api, err, errlen) != 0)
         return -1;
     g_ready = 1;
+    cJSON *r = req_new("console");
+    cJSON_AddNumberToObject(r, "cb", (double)td_register_callback(on_console_line, NULL));
+    cJSON_Delete(td_request(r));
+    td_clear_err();
     return 0;
 }
 
@@ -255,9 +273,9 @@ int td_get_i(th h, const char *name, long long *out)
     cJSON *v = td_get(h, name);
     if (!v)
         return -1;
-    int rc = 0;
-    if (cJSON_IsNumber(v))
-        *out = (long long)v->valuedouble;
+    int rc = 0, uns;
+    if (cJSON_IsNumber(v) || big_digits(v, &uns))
+        *out = tdv_i(v, 0);
     else if (cJSON_IsObject(v) && cJSON_GetObjectItemCaseSensitive(v, "$enum"))
         *out = tdv_i(cJSON_GetObjectItemCaseSensitive(v, "value"), 0);
     else
@@ -327,10 +345,29 @@ cJSON *td_static(const char *type, const char *name, cJSON *args)
 
 th td_static_h(const char *type, const char *name, cJSON *args) { return result_h(td_static(type, name, args)); }
 
+cJSON *td_call_outs(th h, const char *method, cJSON *args)
+{
+    cJSON *r = req_new("call");
+    req_h(r, "h", h);
+    cJSON_AddStringToObject(r, "name", method);
+    cJSON_AddBoolToObject(r, "outs", 1);
+    req_args(r, args);
+    return td_request(r);
+}
+
 th td_new(const char *type, cJSON *args)
 {
     cJSON *r = req_new("new");
     cJSON_AddStringToObject(r, "type", type);
+    req_args(r, args);
+    return result_h(td_request(r));
+}
+
+th td_new_generic(const char *type, const char *generic_csv, cJSON *args)
+{
+    cJSON *r = req_new("new");
+    cJSON_AddStringToObject(r, "type", type);
+    req_csv(r, "generic", generic_csv);
     req_args(r, args);
     return result_h(td_request(r));
 }
@@ -555,10 +592,46 @@ const char *tdv_s(const cJSON *v)
     return NULL;
 }
 
+/* Exact 64-bit integers beyond 2^53 arrive as {"$i64": "digits"} / {"$u64": "digits"}. */
+static const char *big_digits(const cJSON *v, int *is_unsigned)
+{
+    if (!cJSON_IsObject(v))
+        return NULL;
+    const char *s = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(v, "$i64"));
+    *is_unsigned = 0;
+    if (!s) {
+        s = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(v, "$u64"));
+        *is_unsigned = 1;
+    }
+    return s;
+}
+
+int tdv_int64(const cJSON *v, long long *i, unsigned long long *u, int *is_unsigned)
+{
+    int uns = 0;
+    const char *s = big_digits(v, &uns);
+    if (s) {
+        *is_unsigned = uns;
+        *u = uns ? strtoull(s, NULL, 10) : 0;
+        *i = uns ? (long long)*u : strtoll(s, NULL, 10);
+        return 0;
+    }
+    if (!cJSON_IsNumber(v))
+        return -1;
+    *is_unsigned = 0;
+    *i = (long long)v->valuedouble;
+    *u = (unsigned long long)*i;
+    return 0;
+}
+
 long long tdv_i(const cJSON *v, long long def)
 {
     if (cJSON_IsNumber(v))
         return (long long)v->valuedouble;
+    int uns;
+    const char *big = big_digits(v, &uns);
+    if (big)
+        return uns ? (long long)strtoull(big, NULL, 10) : strtoll(big, NULL, 10);
     if (cJSON_IsObject(v) && cJSON_GetObjectItemCaseSensitive(v, "$enum"))
         return tdv_i(cJSON_GetObjectItemCaseSensitive(v, "value"), def);
     if (cJSON_IsBool(v))
@@ -568,6 +641,10 @@ long long tdv_i(const cJSON *v, long long def)
 
 double tdv_d(const cJSON *v, double def)
 {
+    int uns;
+    const char *big = big_digits(v, &uns);
+    if (big)
+        return strtod(big, NULL);
     return cJSON_IsNumber(v) ? v->valuedouble : def;
 }
 
@@ -624,6 +701,10 @@ char *tdv_text(const cJSON *v)
         snprintf(buf, sizeof buf, "<error: %s>", cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(v, "$err")));
         return tc_strdup(buf);
     }
+    int uns;
+    const char *big = big_digits(v, &uns);
+    if (big)
+        return tc_strdup(big);
     const char *t = tdv_type(v);
     if (t) {
         snprintf(buf, sizeof buf, "<%s>", t);
